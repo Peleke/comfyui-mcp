@@ -1,0 +1,38 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input.png"
+    }
+  },
+  "2": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "RealESRGAN_x4plus.pth"
+    }
+  },
+  "3": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": ["2", 0],
+      "image": ["1", 0]
+    }
+  },
+  "4": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": ["3", 0],
+      "width": 2048,
+      "height": 2048,
+      "upscale_method": "lanczos",
+      "crop": "disabled"
+    }
+  },
+  "5": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI_MCP_upscale",
+      "images": ["4", 0]
+    }
+  }
+}
