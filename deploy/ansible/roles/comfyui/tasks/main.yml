@@ -1,0 +1,92 @@
+---
+# ComfyUI base installation
+
+- name: Check if ComfyUI exists
+  stat:
+    path: "{{ comfyui_dir }}"
+  register: comfyui_stat
+
+- name: Clone ComfyUI
+  git:
+    repo: https://github.com/comfyanonymous/ComfyUI.git
+    dest: "{{ comfyui_dir }}"
+    version: master
+    update: yes
+  when: not comfyui_stat.stat.exists
+
+- name: Update ComfyUI
+  git:
+    repo: https://github.com/comfyanonymous/ComfyUI.git
+    dest: "{{ comfyui_dir }}"
+    version: master
+    update: yes
+    force: no
+  when: comfyui_stat.stat.exists
+
+- name: Install ComfyUI requirements
+  pip:
+    requirements: "{{ comfyui_dir }}/requirements.txt"
+    state: present
+
+- name: Install additional Python dependencies
+  pip:
+    name:
+      - websocket-client
+      - aiohttp
+    state: present
+
+- name: Create required directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ models_dir }}/checkpoints"
+    - "{{ models_dir }}/loras"
+    - "{{ models_dir }}/upscale_models"
+    - "{{ models_dir }}/vae"
+    - "{{ models_dir }}/clip"
+    - "{{ comfyui_dir }}/input"
+    - "{{ comfyui_dir }}/input/avatars"
+    - "{{ comfyui_dir }}/input/voices"
+    - "{{ comfyui_dir }}/output"
+
+- name: Create ComfyUI startup script
+  copy:
+    dest: "{{ workspace_dir }}/start-comfyui.sh"
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      cd {{ comfyui_dir }}
+      python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header "$@"
+
+- name: Create systemd service
+  copy:
+    dest: /etc/systemd/system/comfyui.service
+    content: |
+      [Unit]
+      Description=ComfyUI Server
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory={{ comfyui_dir }}
+      ExecStart=/usr/bin/python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Reload systemd
+
+- name: Enable ComfyUI service
+  systemd:
+    name: comfyui
+    enabled: yes
+    daemon_reload: yes
+
+handlers:
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes

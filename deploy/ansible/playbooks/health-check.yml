@@ -1,0 +1,113 @@
+---
+# Health Check Playbook
+#
+# Verifies the full GPU pipeline is working:
+# - ComfyUI responding
+# - GPU available
+# - Models loaded
+# - Custom nodes installed
+#
+# Usage:
+#   ansible-playbook -i inventory/runpod.yml playbooks/health-check.yml
+
+- name: ComfyUI Health Check
+  hosts: runpod
+  gather_facts: no
+
+  tasks:
+    - name: Check ComfyUI API
+      uri:
+        url: http://127.0.0.1:8188/system_stats
+        method: GET
+        return_content: yes
+      register: system_stats
+      ignore_errors: yes
+
+    - name: Check available models
+      uri:
+        url: http://127.0.0.1:8188/object_info
+        method: GET
+        return_content: yes
+      register: object_info
+      ignore_errors: yes
+
+    - name: Check queue status
+      uri:
+        url: http://127.0.0.1:8188/queue
+        method: GET
+        return_content: yes
+      register: queue_status
+      ignore_errors: yes
+
+    - name: List checkpoint files
+      find:
+        paths: "{{ models_dir }}/checkpoints"
+        patterns: "*.safetensors,*.ckpt"
+      register: checkpoint_files
+
+    - name: List custom nodes
+      find:
+        paths: "{{ custom_nodes_dir }}"
+        file_type: directory
+        recurse: no
+      register: custom_nodes
+
+    - name: Check disk space
+      shell: df -h {{ workspace_dir }} | tail -1
+      register: disk_info
+      changed_when: false
+
+    - name: Generate health report
+      set_fact:
+        health_report: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║                    ComfyUI Health Report                     ║
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ API Status                                                   ║
+          ║   └─ {{ 'HEALTHY' if system_stats.status | default(0) == 200 else 'UNHEALTHY' }}: {{ system_stats.status | default('N/A') }}                                              ║
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ System Info                                                  ║
+          {% if system_stats.json is defined %}
+          ║   ├─ OS: {{ system_stats.json.system.os | default('Unknown') }}
+          ║   └─ Python: {{ system_stats.json.system.python_version | default('Unknown') }}
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ GPU Info                                                     ║
+          {% for device in system_stats.json.devices | default([]) %}
+          ║   ├─ {{ device.name }}
+          ║   ├─ VRAM Total: {{ (device.vram_total / 1024 / 1024 / 1024) | round(1) }} GB
+          ║   └─ VRAM Free: {{ (device.vram_free / 1024 / 1024 / 1024) | round(1) }} GB
+          {% endfor %}
+          {% else %}
+          ║   └─ Unable to retrieve system info
+          {% endif %}
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ Models                                                       ║
+          ║   └─ Checkpoints: {{ checkpoint_files.files | length }}
+          {% for file in checkpoint_files.files[:5] %}
+          ║       • {{ file.path | basename }}
+          {% endfor %}
+          {% if checkpoint_files.files | length > 5 %}
+          ║       ... and {{ checkpoint_files.files | length - 5 }} more
+          {% endif %}
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ Custom Nodes                                                 ║
+          ║   └─ Installed: {{ custom_nodes.files | length }}
+          {% for node in custom_nodes.files %}
+          ║       • {{ node.path | basename }}
+          {% endfor %}
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ Queue Status                                                 ║
+          {% if queue_status.json is defined %}
+          ║   ├─ Running: {{ queue_status.json.queue_running | length }}
+          ║   └─ Pending: {{ queue_status.json.queue_pending | length }}
+          {% else %}
+          ║   └─ Unable to retrieve queue status
+          {% endif %}
+          ╠══════════════════════════════════════════════════════════════╣
+          ║ Disk Space                                                   ║
+          ║   └─ {{ disk_info.stdout }}
+          ╚══════════════════════════════════════════════════════════════╝
+
+    - name: Display health report
+      debug:
+        msg: "{{ health_report.split('\n') }}"

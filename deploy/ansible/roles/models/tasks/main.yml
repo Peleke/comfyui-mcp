@@ -1,0 +1,78 @@
+---
+# Download AI models for ComfyUI
+
+- name: Download upscale models
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop: "{{ upscale_models }}"
+  when: upscale_models is defined
+  register: upscale_download
+  until: upscale_download is success
+  retries: 3
+  delay: 5
+
+- name: Download Flux models
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    timeout: 600  # 10 min for large models
+  loop: "{{ flux_models }}"
+  when: install_flux | default(false) and flux_models is defined
+  register: flux_download
+  until: flux_download is success
+  retries: 3
+  delay: 10
+
+- name: Download SDXL models
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    timeout: 600
+  loop: "{{ sdxl_models }}"
+  when: install_sdxl | default(false) and sdxl_models is defined
+  register: sdxl_download
+  until: sdxl_download is success
+  retries: 3
+  delay: 10
+
+# VAE models (often bundled, but can download separately)
+- name: Download VAE models
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop: "{{ vae_models | default([]) }}"
+  when: vae_models is defined and vae_models | length > 0
+  register: vae_download
+  until: vae_download is success
+  retries: 3
+  delay: 5
+
+# LoRA models
+- name: Download LoRA models
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop: "{{ lora_models | default([]) }}"
+  when: lora_models is defined and lora_models | length > 0
+  register: lora_download
+  until: lora_download is success
+  retries: 3
+  delay: 5
+
+- name: List downloaded models
+  find:
+    paths: "{{ models_dir }}"
+    recurse: yes
+    file_type: file
+    patterns: "*.safetensors,*.pth,*.ckpt"
+  register: model_files
+
+- name: Display model summary
+  debug:
+    msg: "Downloaded {{ model_files.files | length }} model files"

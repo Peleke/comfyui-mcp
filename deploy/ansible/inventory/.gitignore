@@ -1,0 +1,5 @@
+# Local inventory files with secrets
+*-local.yml
+*-local.yaml
+*.local.yml
+*.local.yaml

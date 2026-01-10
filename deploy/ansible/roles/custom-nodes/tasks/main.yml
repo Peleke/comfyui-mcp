@@ -1,0 +1,86 @@
+---
+# Install ComfyUI custom nodes
+
+- name: Ensure custom_nodes directory exists
+  file:
+    path: "{{ custom_nodes_dir }}"
+    state: directory
+    mode: '0755'
+
+# F5-TTS for voice cloning
+- name: Clone F5-TTS custom node
+  git:
+    repo: https://github.com/AIFSH/F5-TTS-ComfyUI.git
+    dest: "{{ custom_nodes_dir }}/F5-TTS-ComfyUI"
+    version: main
+    update: yes
+  when: install_tts | default(true)
+  register: f5tts_clone
+
+- name: Install F5-TTS requirements
+  pip:
+    requirements: "{{ custom_nodes_dir }}/F5-TTS-ComfyUI/requirements.txt"
+    state: present
+  when: install_tts | default(true) and f5tts_clone is changed
+  ignore_errors: yes  # Some deps may conflict, install manually if needed
+
+# LatentSync for lip-sync video generation
+- name: Clone LatentSync custom node
+  git:
+    repo: https://github.com/ShmuelRonen/ComfyUI-LatentSyncWrapper.git
+    dest: "{{ custom_nodes_dir }}/ComfyUI-LatentSyncWrapper"
+    version: main
+    update: yes
+  when: install_lipsync | default(true)
+  register: latentsync_clone
+
+- name: Install LatentSync requirements
+  pip:
+    requirements: "{{ custom_nodes_dir }}/ComfyUI-LatentSyncWrapper/requirements.txt"
+    state: present
+  when: install_lipsync | default(true) and latentsync_clone is changed
+  ignore_errors: yes
+
+# ComfyUI Manager (useful for installing other nodes)
+- name: Clone ComfyUI Manager
+  git:
+    repo: https://github.com/ltdrdata/ComfyUI-Manager.git
+    dest: "{{ custom_nodes_dir }}/ComfyUI-Manager"
+    version: main
+    update: yes
+  register: manager_clone
+
+# GGUF support for quantized models
+- name: Clone GGUF node
+  git:
+    repo: https://github.com/city96/ComfyUI-GGUF.git
+    dest: "{{ custom_nodes_dir }}/ComfyUI-GGUF"
+    version: main
+    update: yes
+  register: gguf_clone
+
+- name: Install GGUF requirements
+  pip:
+    name:
+      - gguf
+    state: present
+  when: gguf_clone is changed
+
+# Video Helper Suite (for video processing)
+- name: Clone Video Helper Suite
+  git:
+    repo: https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+    dest: "{{ custom_nodes_dir }}/ComfyUI-VideoHelperSuite"
+    version: main
+    update: yes
+
+- name: List installed custom nodes
+  find:
+    paths: "{{ custom_nodes_dir }}"
+    file_type: directory
+    recurse: no
+  register: custom_nodes_list
+
+- name: Display custom nodes summary
+  debug:
+    msg: "Installed {{ custom_nodes_list.files | length }} custom nodes: {{ custom_nodes_list.files | map(attribute='path') | map('basename') | list }}"

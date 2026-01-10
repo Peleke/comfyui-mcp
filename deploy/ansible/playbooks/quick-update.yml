@@ -1,0 +1,119 @@
+---
+# Quick Update Playbook
+#
+# Lightweight playbook for quick updates without re-downloading models.
+# Use this for:
+# - Updating ComfyUI to latest version
+# - Updating custom nodes
+# - Restarting services
+# - Checking system status
+#
+# Usage:
+#   # Update ComfyUI and restart
+#   ansible-playbook -i inventory/runpod.yml playbooks/quick-update.yml
+#
+#   # Only restart service
+#   ansible-playbook -i inventory/runpod.yml playbooks/quick-update.yml --tags restart
+#
+#   # Only check status
+#   ansible-playbook -i inventory/runpod.yml playbooks/quick-update.yml --tags status
+
+- name: Quick ComfyUI Update
+  hosts: runpod
+  gather_facts: no
+
+  tasks:
+    # Status check
+    - name: Check ComfyUI process
+      shell: pgrep -f "python.*main.py" || echo "not running"
+      register: comfyui_process
+      changed_when: false
+      tags: [status, always]
+
+    - name: Check ComfyUI API
+      uri:
+        url: http://127.0.0.1:8188/system_stats
+        method: GET
+        return_content: yes
+        timeout: 5
+      register: api_status
+      ignore_errors: yes
+      tags: [status]
+
+    - name: Display current status
+      debug:
+        msg: |
+          ComfyUI Status
+          ==============
+          Process: {{ 'Running (PID: ' + comfyui_process.stdout + ')' if comfyui_process.stdout != 'not running' else 'Not running' }}
+          API: {{ 'Responding' if api_status.status | default(0) == 200 else 'Not responding' }}
+          {% if api_status.json is defined %}
+          GPU: {{ api_status.json.devices[0].name | default('Unknown') }}
+          VRAM: {{ (api_status.json.devices[0].vram_free / 1024 / 1024 / 1024) | round(1) }}GB free / {{ (api_status.json.devices[0].vram_total / 1024 / 1024 / 1024) | round(1) }}GB total
+          {% endif %}
+      tags: [status]
+
+    # Update ComfyUI
+    - name: Pull latest ComfyUI
+      git:
+        repo: https://github.com/comfyanonymous/ComfyUI.git
+        dest: "{{ comfyui_dir }}"
+        version: master
+        update: yes
+      register: comfyui_updated
+      tags: [update]
+
+    # Update custom nodes
+    - name: Find custom nodes
+      find:
+        paths: "{{ custom_nodes_dir }}"
+        file_type: directory
+        recurse: no
+      register: custom_nodes
+      tags: [update, nodes]
+
+    - name: Update custom nodes
+      git:
+        repo: "{{ item.path }}/.git"
+        dest: "{{ item.path }}"
+        update: yes
+      loop: "{{ custom_nodes.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      ignore_errors: yes
+      tags: [update, nodes]
+
+    # Restart service
+    - name: Restart ComfyUI service
+      systemd:
+        name: comfyui
+        state: restarted
+      when: comfyui_updated.changed or (restart | default(false))
+      tags: [restart, update]
+
+    - name: Wait for ComfyUI to start
+      wait_for:
+        port: 8188
+        host: 127.0.0.1
+        delay: 3
+        timeout: 60
+      tags: [restart, update]
+
+    - name: Verify ComfyUI is responding
+      uri:
+        url: http://127.0.0.1:8188/system_stats
+        method: GET
+      register: final_status
+      retries: 3
+      delay: 5
+      tags: [restart, update, verify]
+
+    - name: Display update summary
+      debug:
+        msg: |
+          Update Complete
+          ===============
+          ComfyUI updated: {{ comfyui_updated.changed }}
+          Service status: Running
+          API responding: Yes
+      tags: [update, verify]

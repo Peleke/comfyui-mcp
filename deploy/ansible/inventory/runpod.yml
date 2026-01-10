@@ -1,0 +1,57 @@
+# RunPod Inventory Template
+#
+# Copy this to inventory/runpod-local.yml and fill in your pod details.
+# The local file is gitignored.
+#
+# Get SSH details from RunPod dashboard:
+#   1. Go to Pods → Your Pod → Connect
+#   2. Copy SSH command: ssh root@<IP> -p <PORT> -i ~/.ssh/id_ed25519
+#
+# Usage:
+#   ansible-playbook -i inventory/runpod-local.yml playbooks/full-setup.yml
+
+all:
+  hosts:
+    runpod:
+      # Required: Get from RunPod dashboard
+      ansible_host: "{{ lookup('env', 'RUNPOD_HOST') | default('YOUR_POD_IP', true) }}"
+      ansible_port: "{{ lookup('env', 'RUNPOD_SSH_PORT') | default(22, true) }}"
+      ansible_user: root
+
+      # SSH key (default: ~/.ssh/id_ed25519)
+      ansible_ssh_private_key_file: "{{ lookup('env', 'RUNPOD_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
+
+      # Disable host key checking for dynamic IPs
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  vars:
+    # Paths on RunPod
+    workspace_dir: /workspace
+    comfyui_dir: /workspace/ComfyUI
+    models_dir: /workspace/ComfyUI/models
+    custom_nodes_dir: /workspace/ComfyUI/custom_nodes
+
+    # ComfyUI proxy URL (for health checks)
+    comfyui_proxy_url: "{{ lookup('env', 'COMFYUI_URL') | default('', true) }}"
+
+    # Model selection (override in playbook or command line)
+    install_flux: true
+    install_sdxl: true
+    install_tts: true
+    install_lipsync: true
+
+    # Specific models to download
+    flux_models:
+      - name: flux1-schnell-fp8
+        url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors"
+        dest: "{{ models_dir }}/checkpoints/flux1-schnell-fp8.safetensors"
+
+    sdxl_models:
+      - name: perfectdeliberate_v6
+        url: "https://civitai.com/api/download/models/245614"
+        dest: "{{ models_dir }}/checkpoints/perfectdeliberate_v6.safetensors"
+
+    upscale_models:
+      - name: RealESRGAN_x4plus
+        url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+        dest: "{{ models_dir }}/upscale_models/RealESRGAN_x4plus.pth"

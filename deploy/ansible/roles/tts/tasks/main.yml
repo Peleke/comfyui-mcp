@@ -1,0 +1,50 @@
+---
+# Download TTS models for F5-TTS
+
+- name: Create TTS model directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ custom_nodes_dir }}/F5-TTS-ComfyUI/models"
+    - "{{ custom_nodes_dir }}/F5-TTS-ComfyUI/models/F5-TTS"
+    - "{{ comfyui_dir }}/input/voices"
+  when: install_tts | default(true)
+
+# F5-TTS model is downloaded automatically on first use,
+# but we can pre-download for faster first inference
+
+- name: Check if F5-TTS model exists
+  stat:
+    path: "{{ custom_nodes_dir }}/F5-TTS-ComfyUI/models/F5-TTS/model_1200000.safetensors"
+  register: f5tts_model
+  when: install_tts | default(true)
+
+- name: Download F5-TTS model (if not exists)
+  get_url:
+    url: "https://huggingface.co/SWivid/F5-TTS/resolve/main/F5TTS_Base/model_1200000.safetensors"
+    dest: "{{ custom_nodes_dir }}/F5-TTS-ComfyUI/models/F5-TTS/model_1200000.safetensors"
+    mode: '0644'
+    timeout: 300
+  when:
+    - install_tts | default(true)
+    - not f5tts_model.stat.exists | default(true)
+  register: f5tts_download
+  until: f5tts_download is success
+  retries: 3
+  delay: 10
+
+# Download sample voice files for testing
+- name: Download sample voice references
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ comfyui_dir }}/input/voices/{{ item.name }}"
+    mode: '0644'
+  loop: "{{ sample_voices | default([]) }}"
+  when: sample_voices is defined and sample_voices | length > 0
+
+- name: Display TTS setup status
+  debug:
+    msg: "F5-TTS ready. Place voice samples (10-30s WAV/MP3) in {{ comfyui_dir }}/input/voices/"
+  when: install_tts | default(true)

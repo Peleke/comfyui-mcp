@@ -1,0 +1,120 @@
+---
+# Full RunPod Setup Playbook
+#
+# Installs everything needed for the GPU pipeline:
+# - ComfyUI base installation
+# - Custom nodes (F5-TTS, LatentSync, GGUF, etc.)
+# - Models (Flux, SDXL, upscalers)
+# - TTS models
+#
+# Usage:
+#   # Set environment variables
+#   export RUNPOD_HOST=<pod_ip>
+#   export RUNPOD_SSH_PORT=<ssh_port>
+#
+#   # Run full setup
+#   ansible-playbook -i inventory/runpod.yml playbooks/full-setup.yml
+#
+#   # Skip large model downloads
+#   ansible-playbook -i inventory/runpod.yml playbooks/full-setup.yml \
+#     -e "install_flux=false install_sdxl=false"
+#
+#   # Only install specific components
+#   ansible-playbook -i inventory/runpod.yml playbooks/full-setup.yml \
+#     --tags "comfyui,custom-nodes"
+
+- name: Full ComfyUI Setup on RunPod
+  hosts: runpod
+  gather_facts: yes
+
+  vars:
+    # Override in inventory or command line
+    install_flux: true
+    install_sdxl: true
+    install_tts: true
+    install_lipsync: true
+
+  pre_tasks:
+    - name: Display setup configuration
+      debug:
+        msg: |
+          ComfyUI Full Setup
+          ==================
+          Host: {{ ansible_host }}:{{ ansible_port }}
+          Workspace: {{ workspace_dir }}
+
+          Components:
+          - Flux models: {{ install_flux }}
+          - SDXL models: {{ install_sdxl }}
+          - TTS (F5-TTS): {{ install_tts }}
+          - Lip-sync (LatentSync): {{ install_lipsync }}
+
+    - name: Check disk space
+      shell: df -h {{ workspace_dir }} | tail -1 | awk '{print $4}'
+      register: disk_space
+      changed_when: false
+
+    - name: Display available disk space
+      debug:
+        msg: "Available disk space: {{ disk_space.stdout }}"
+
+    - name: Warn if low disk space
+      debug:
+        msg: "WARNING: Low disk space. Large models require 10GB+ free space."
+      when: "'G' not in disk_space.stdout or (disk_space.stdout | regex_replace('[^0-9.]', '') | float < 10)"
+
+  roles:
+    - role: comfyui
+      tags: [comfyui, base]
+
+    - role: custom-nodes
+      tags: [custom-nodes, nodes]
+
+    - role: models
+      tags: [models]
+
+    - role: tts
+      tags: [tts]
+      when: install_tts | default(true)
+
+  post_tasks:
+    - name: Start ComfyUI service
+      systemd:
+        name: comfyui
+        state: restarted
+        enabled: yes
+      tags: [start, service]
+
+    - name: Wait for ComfyUI to start
+      wait_for:
+        port: 8188
+        host: 127.0.0.1
+        delay: 5
+        timeout: 60
+      tags: [start, service]
+
+    - name: Get ComfyUI status
+      uri:
+        url: http://127.0.0.1:8188/system_stats
+        method: GET
+        return_content: yes
+      register: comfyui_status
+      ignore_errors: yes
+      tags: [verify]
+
+    - name: Display setup summary
+      debug:
+        msg: |
+          ==========================================
+          Setup Complete!
+          ==========================================
+
+          ComfyUI Status: {{ 'Running' if comfyui_status.status == 200 else 'Starting...' }}
+
+          Access via RunPod proxy URL (port 8188)
+
+          Next steps:
+          1. Get proxy URL from RunPod dashboard
+          2. Set COMFYUI_URL environment variable
+          3. Test with: curl https://<pod-id>-8188.proxy.runpod.net/system_stats
+      tags: [verify]
