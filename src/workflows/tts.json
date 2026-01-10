@@ -1,0 +1,28 @@
+{
+  "1": {
+    "class_type": "LoadAudio",
+    "inputs": {
+      "audio": "reference_voice.wav"
+    }
+  },
+  "2": {
+    "class_type": "F5TTSAudioInputs",
+    "inputs": {
+      "sample_audio": ["1", 0],
+      "sample_text": "Reference audio transcript here.",
+      "speech": "Hello, world!",
+      "seed": -1,
+      "model": "F5TTS_v1_Base",
+      "vocoder": "vocos",
+      "speed": 1.0,
+      "model_type": "F5-TTS"
+    }
+  },
+  "3": {
+    "class_type": "SaveAudioTensor",
+    "inputs": {
+      "audio": ["2", 0],
+      "filename_prefix": "ComfyUI_TTS"
+    }
+  }
+}
