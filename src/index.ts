@@ -58,6 +58,11 @@ import {
   batchCreatePortraits,
   batchCreatePortraitsSchema,
 } from "./tools/avatar.js";
+import {
+  checkConnection,
+  checkConnectionSchema,
+  pingComfyUI,
+} from "./tools/health.js";
 
 // Configuration from environment
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
@@ -1248,6 +1253,24 @@ const TOOLS = [
       required: ["portraits", "output_dir"],
     },
   },
+  {
+    name: "check_connection",
+    description:
+      "Check health of ComfyUI connection and storage providers. Returns GPU info, latency, and storage status. Use before expensive operations.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "ping_comfyui",
+    description:
+      "Quick connectivity check - just verifies ComfyUI is reachable. Faster than full health check.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
 // Create server
@@ -1740,6 +1763,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "batch_create_portraits": {
         const validatedArgs = batchCreatePortraitsSchema.parse(args);
         const result = await batchCreatePortraits(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "check_connection": {
+        const validatedArgs = checkConnectionSchema.parse(args);
+        const result = await checkConnection(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "ping_comfyui": {
+        const result = await pingComfyUI(client);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
