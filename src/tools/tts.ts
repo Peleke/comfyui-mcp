@@ -2,7 +2,12 @@ import { z } from "zod";
 import { ComfyUIClient } from "../comfyui-client.js";
 import { buildTTSWorkflow, TTSParams } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { dirname, basename } from "path";
+import {
+  getStorageProvider,
+  isCloudStorageConfigured,
+  generateRemotePath,
+} from "../storage/index.js";
 
 // ============================================================================
 // Schemas
@@ -17,6 +22,8 @@ export const ttsGenerateSchema = z.object({
   model: z.string().optional().default("F5TTS_v1_Base").describe("TTS model to use"),
   vocoder: z.enum(["auto", "vocos", "bigvgan"]).optional().default("vocos").describe("Vocoder for audio synthesis"),
   output_path: z.string().describe("Full path to save the output audio"),
+  upload_to_cloud: z.boolean().optional().default(true)
+    .describe("Upload to cloud storage if configured (default: true)"),
 });
 
 export const listTTSModelsSchema = z.object({});
@@ -29,11 +36,14 @@ export const listVoicesSchema = z.object({});
 
 /**
  * Generate speech from text using F5-TTS with voice cloning
+ * Optionally uploads to cloud storage if configured
  */
 export async function ttsGenerate(
-  args: z.infer<typeof ttsGenerateSchema>,
+  rawArgs: z.input<typeof ttsGenerateSchema>,
   client: ComfyUIClient
-): Promise<{ audio: string; text: string }> {
+): Promise<{ audio: string; text: string; remote_url?: string }> {
+  // Parse and apply defaults
+  const args = ttsGenerateSchema.parse(rawArgs);
   const {
     text,
     voice_reference,
@@ -43,6 +53,7 @@ export async function ttsGenerate(
     model,
     vocoder,
     output_path,
+    upload_to_cloud,
   } = args;
 
   // Build workflow
@@ -81,9 +92,24 @@ export async function ttsGenerate(
     await fs.writeFile(output_path, audioData);
   }
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  if (upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("audio", basename(output_path));
+      const result = await storage.upload(output_path, remotePath);
+      remote_url = result.url || undefined;
+    } catch (error) {
+      // Log but don't fail the operation if cloud upload fails
+      console.error("Cloud upload failed:", error);
+    }
+  }
+
   return {
     audio: output_path,
     text,
+    remote_url,
   };
 }
 

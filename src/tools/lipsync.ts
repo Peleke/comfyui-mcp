@@ -6,7 +6,12 @@ import {
   LipSyncParams,
 } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { dirname, basename } from "path";
+import {
+  getStorageProvider,
+  isCloudStorageConfigured,
+  generateRemotePath,
+} from "../storage/index.js";
 
 // ============================================================================
 // Schemas
@@ -18,21 +23,22 @@ export const lipSyncGenerateSchema = z.object({
   model: z.enum(["sonic", "dice-talk", "hallo2", "sadtalker"]).optional().default("sonic")
     .describe("Lip-sync model to use"),
   // SONIC-specific parameters
-  checkpoint: z.string().optional().describe("Base SD model checkpoint"),
-  clip_vision: z.string().optional().describe("CLIP Vision model"),
-  vae: z.string().optional().describe("VAE model"),
+  svd_checkpoint: z.string().optional().default("video/svd_xt_1_1.safetensors")
+    .describe("SVD checkpoint (provides MODEL, CLIP_VISION, VAE)"),
   sonic_unet: z.string().optional().default("unet.pth").describe("SONIC unet model file"),
   ip_audio_scale: z.number().optional().default(1.0).describe("Audio influence scale (0.5-2.0)"),
   use_interframe: z.boolean().optional().default(true).describe("Use interframe interpolation"),
   dtype: z.enum(["fp16", "fp32", "bf16"]).optional().default("fp16").describe("Model precision"),
   min_resolution: z.number().optional().default(512).describe("Minimum resolution"),
-  duration: z.number().optional().default(10.0).describe("Maximum duration in seconds"),
-  expand_ratio: z.number().optional().default(0.5).describe("Face crop expansion ratio"),
+  duration: z.number().optional().default(99999).describe("Maximum duration in seconds (99999 = use audio length)"),
+  expand_ratio: z.number().optional().default(1).describe("Face crop expansion ratio"),
   inference_steps: z.number().optional().default(25).describe("Number of inference steps"),
   dynamic_scale: z.number().optional().default(1.0).describe("Dynamic scale factor"),
   fps: z.number().optional().default(25.0).describe("Output video FPS"),
   seed: z.number().optional().describe("Random seed for reproducibility"),
   output_path: z.string().describe("Full path to save the output video"),
+  upload_to_cloud: z.boolean().optional().default(true)
+    .describe("Upload to cloud storage if configured (default: true)"),
 });
 
 export const talkSchema = z.object({
@@ -44,14 +50,15 @@ export const talkSchema = z.object({
   speed: z.number().optional().default(1.0).describe("Speech speed multiplier"),
   tts_seed: z.number().optional().describe("TTS random seed"),
   // LipSync params
-  checkpoint: z.string().optional().describe("Base SD model checkpoint"),
-  clip_vision: z.string().optional().describe("CLIP Vision model"),
-  vae: z.string().optional().describe("VAE model"),
+  svd_checkpoint: z.string().optional().default("video/svd_xt_1_1.safetensors")
+    .describe("SVD checkpoint for SONIC"),
   sonic_unet: z.string().optional().default("unet.pth"),
   inference_steps: z.number().optional().default(25),
   fps: z.number().optional().default(25.0),
   lipsync_seed: z.number().optional().describe("Lip-sync random seed"),
   output_path: z.string().describe("Full path to save the output video"),
+  upload_to_cloud: z.boolean().optional().default(true)
+    .describe("Upload to cloud storage if configured (default: true)"),
 });
 
 export const listLipSyncModelsSchema = z.object({});
@@ -62,18 +69,19 @@ export const listLipSyncModelsSchema = z.object({});
 
 /**
  * Generate a lip-synced video from portrait + audio
+ * Optionally uploads to cloud storage if configured
  */
 export async function lipSyncGenerate(
-  args: z.infer<typeof lipSyncGenerateSchema>,
+  rawArgs: z.input<typeof lipSyncGenerateSchema>,
   client: ComfyUIClient
-): Promise<{ video: string; duration?: number }> {
+): Promise<{ video: string; duration?: number; remote_url?: string }> {
+  // Parse and apply defaults
+  const args = lipSyncGenerateSchema.parse(rawArgs);
   const {
     portrait_image,
     audio,
-    model = "sonic",
-    checkpoint,
-    clip_vision,
-    vae,
+    model,
+    svd_checkpoint,
     sonic_unet,
     ip_audio_scale,
     use_interframe,
@@ -86,6 +94,7 @@ export async function lipSyncGenerate(
     fps,
     seed,
     output_path,
+    upload_to_cloud,
   } = args;
 
   // Only SONIC is implemented for now
@@ -98,9 +107,7 @@ export async function lipSyncGenerate(
     portraitImage: portrait_image,
     audio,
     model,
-    checkpoint,
-    clipVision: clip_vision,
-    vae,
+    svdCheckpoint: svd_checkpoint,
     sonicUnet: sonic_unet,
     ipAudioScale: ip_audio_scale,
     useInterframe: use_interframe,
@@ -145,19 +152,37 @@ export async function lipSyncGenerate(
     await fs.writeFile(output_path, videoData);
   }
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  if (upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("videos", basename(output_path));
+      const result = await storage.upload(output_path, remotePath);
+      remote_url = result.url || undefined;
+    } catch (error) {
+      // Log but don't fail the operation if cloud upload fails
+      console.error("Cloud upload failed:", error);
+    }
+  }
+
   return {
     video: output_path,
     duration: duration,
+    remote_url,
   };
 }
 
 /**
  * Full pipeline: Text → TTS → LipSync → Video
+ * Optionally uploads to cloud storage if configured
  */
 export async function talk(
-  args: z.infer<typeof talkSchema>,
+  rawArgs: z.input<typeof talkSchema>,
   client: ComfyUIClient
-): Promise<{ video: string; text: string }> {
+): Promise<{ video: string; text: string; remote_url?: string }> {
+  // Parse and apply defaults
+  const args = talkSchema.parse(rawArgs);
   const {
     text,
     voice_reference,
@@ -165,14 +190,13 @@ export async function talk(
     portrait_image,
     speed,
     tts_seed,
-    checkpoint,
-    clip_vision,
-    vae,
+    svd_checkpoint,
     sonic_unet,
     inference_steps,
     fps,
     lipsync_seed,
     output_path,
+    upload_to_cloud,
   } = args;
 
   // Build combined workflow
@@ -183,9 +207,7 @@ export async function talk(
     portraitImage: portrait_image,
     speed,
     ttsSeed: tts_seed,
-    checkpoint,
-    clipVision: clip_vision,
-    vae,
+    svdCheckpoint: svd_checkpoint,
     sonicUnet: sonic_unet,
     inferenceSteps: inference_steps,
     fps,
@@ -215,9 +237,24 @@ export async function talk(
   const fs = await import("fs/promises");
   await fs.writeFile(output_path, videoData);
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  if (upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("videos", basename(output_path));
+      const result = await storage.upload(output_path, remotePath);
+      remote_url = result.url || undefined;
+    } catch (error) {
+      // Log but don't fail the operation if cloud upload fails
+      console.error("Cloud upload failed:", error);
+    }
+  }
+
   return {
     video: output_path,
     text,
+    remote_url,
   };
 }
 

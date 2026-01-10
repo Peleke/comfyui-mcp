@@ -2,7 +2,12 @@ import { z } from "zod";
 import { ComfyUIClient } from "../comfyui-client.js";
 import { buildTxt2ImgWorkflow } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
-import { dirname, join } from "path";
+import { dirname, join, basename } from "path";
+import {
+  getStorageProvider,
+  isCloudStorageConfigured,
+  generateRemotePath,
+} from "../storage/index.js";
 
 // ============================================================================
 // Conventions
@@ -45,6 +50,8 @@ export const createPortraitSchema = z.object({
   width: z.number().optional().default(768).describe("Image width"),
   height: z.number().optional().default(1024).describe("Image height (portrait orientation)"),
   output_path: z.string().describe("Full path to save the portrait image"),
+  upload_to_cloud: z.boolean().optional().default(true)
+    .describe("Upload to cloud storage if configured (default: true)"),
 });
 
 export const batchCreatePortraitsSchema = z.object({
@@ -246,11 +253,12 @@ function buildPortraitPrompt(args: {
 /**
  * Generate a portrait image optimized for lip-sync
  * Supports multiple backends: Flux GGUF, Flux FP8, SDXL
+ * Optionally uploads to cloud storage if configured
  */
 export async function createPortrait(
   args: z.infer<typeof createPortraitSchema>,
   client: ComfyUIClient
-): Promise<{ image: string; prompt: string; model: string }> {
+): Promise<{ image: string; prompt: string; model: string; remote_url?: string }> {
   const {
     description,
     style,
@@ -265,6 +273,7 @@ export async function createPortrait(
     width,
     height,
     output_path,
+    upload_to_cloud,
   } = args;
 
   // Build optimized portrait prompt
@@ -347,10 +356,25 @@ export async function createPortrait(
   const fs = await import("fs/promises");
   await fs.writeFile(output_path, imageData);
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  if (upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("images", basename(output_path));
+      const result = await storage.upload(output_path, remotePath);
+      remote_url = result.url || undefined;
+    } catch (error) {
+      // Log but don't fail the operation if cloud upload fails
+      console.error("Cloud upload failed:", error);
+    }
+  }
+
   return {
     image: output_path,
     prompt,
     model: usedModel,
+    remote_url,
   };
 }
 
@@ -369,6 +393,7 @@ export async function batchCreatePortraits(
     model: string;
     success: boolean;
     error?: string;
+    remote_url?: string;
   }>;
   summary: {
     total: number;
@@ -387,6 +412,7 @@ export async function batchCreatePortraits(
     model: string;
     success: boolean;
     error?: string;
+    remote_url?: string;
   }> = [];
 
   for (const portrait of portraits) {
@@ -417,6 +443,7 @@ export async function batchCreatePortraits(
         prompt: result.prompt,
         model: result.model,
         success: true,
+        remote_url: result.remote_url,
       });
 
       console.error(`Generated: ${portrait.name} with ${portrait.model}`);
