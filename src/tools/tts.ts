@@ -8,6 +8,12 @@ import {
   isCloudStorageConfigured,
   generateRemotePath,
 } from "../storage/index.js";
+import {
+  ProgressOptions,
+  createProgressEmitter,
+  wrapComfyUIProgress,
+  generateTaskId,
+} from "../progress.js";
 
 // ============================================================================
 // Schemas
@@ -40,8 +46,9 @@ export const listVoicesSchema = z.object({});
  */
 export async function ttsGenerate(
   rawArgs: z.input<typeof ttsGenerateSchema>,
-  client: ComfyUIClient
-): Promise<{ audio: string; text: string; remote_url?: string }> {
+  client: ComfyUIClient,
+  progressOptions?: ProgressOptions
+): Promise<{ audio: string; text: string; remote_url?: string; taskId: string }> {
   // Parse and apply defaults
   const args = ttsGenerateSchema.parse(rawArgs);
   const {
@@ -56,6 +63,13 @@ export async function ttsGenerate(
     upload_to_cloud,
   } = args;
 
+  // Set up progress tracking
+  const taskId = progressOptions?.taskId ?? generateTaskId();
+  const emit = createProgressEmitter(taskId, progressOptions?.onProgress);
+
+  emit("queued", 0, "TTS generation queued");
+  emit("starting", 5, "Building F5-TTS workflow");
+
   // Build workflow
   const workflow = buildTTSWorkflow({
     text,
@@ -68,18 +82,27 @@ export async function ttsGenerate(
     filenamePrefix: "ComfyUI_TTS",
   });
 
+  emit("loading_model", 10, "Queueing workflow, loading models");
+
   // Execute workflow
   const { prompt_id } = await client.queuePrompt(workflow);
-  const history = await client.waitForCompletion(prompt_id);
+
+  emit("generating", 15, "Generating speech");
+
+  const history = await client.waitForCompletion(prompt_id, wrapComfyUIProgress(emit));
 
   if (!history || !history.outputs) {
+    emit("error", 0, "No output from workflow");
     throw new Error("No output from workflow");
   }
+
+  emit("post_processing", 85, "Processing audio output");
 
   // Find audio output (node "3" is SaveAudioTensor)
   const audioOutput = history.outputs["3"] as any;
 
   if (!audioOutput) {
+    emit("error", 0, "No audio output found");
     throw new Error("No audio output found in workflow result");
   }
 
@@ -95,6 +118,7 @@ export async function ttsGenerate(
   // Upload to cloud storage if configured and requested
   let remote_url: string | undefined;
   if (upload_to_cloud && isCloudStorageConfigured()) {
+    emit("uploading", 90, "Uploading to cloud storage");
     try {
       const storage = getStorageProvider();
       const remotePath = generateRemotePath("audio", basename(output_path));
@@ -106,10 +130,13 @@ export async function ttsGenerate(
     }
   }
 
+  emit("complete", 100, "TTS generation complete");
+
   return {
     audio: output_path,
     text,
     remote_url,
+    taskId,
   };
 }
 

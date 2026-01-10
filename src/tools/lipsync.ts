@@ -12,6 +12,12 @@ import {
   isCloudStorageConfigured,
   generateRemotePath,
 } from "../storage/index.js";
+import {
+  ProgressOptions,
+  createProgressEmitter,
+  wrapComfyUIProgress,
+  generateTaskId,
+} from "../progress.js";
 
 // ============================================================================
 // Schemas
@@ -73,8 +79,9 @@ export const listLipSyncModelsSchema = z.object({});
  */
 export async function lipSyncGenerate(
   rawArgs: z.input<typeof lipSyncGenerateSchema>,
-  client: ComfyUIClient
-): Promise<{ video: string; duration?: number; remote_url?: string }> {
+  client: ComfyUIClient,
+  progressOptions?: ProgressOptions
+): Promise<{ video: string; duration?: number; remote_url?: string; taskId: string }> {
   // Parse and apply defaults
   const args = lipSyncGenerateSchema.parse(rawArgs);
   const {
@@ -97,10 +104,19 @@ export async function lipSyncGenerate(
     upload_to_cloud,
   } = args;
 
+  // Set up progress tracking
+  const taskId = progressOptions?.taskId ?? generateTaskId();
+  const emit = createProgressEmitter(taskId, progressOptions?.onProgress);
+
+  emit("queued", 0, "Lip-sync generation queued");
+
   // Only SONIC is implemented for now
   if (model !== "sonic") {
+    emit("error", 0, `Model '${model}' is not supported`);
     throw new Error(`Model '${model}' is not yet implemented. Only 'sonic' is currently supported.`);
   }
+
+  emit("starting", 5, "Building SONIC workflow");
 
   // Build workflow
   const workflow = buildLipSyncWorkflow({
@@ -122,13 +138,21 @@ export async function lipSyncGenerate(
     filenamePrefix: "ComfyUI_LipSync",
   });
 
+  emit("loading_model", 10, "Queueing workflow, loading models");
+
   // Execute workflow
   const { prompt_id } = await client.queuePrompt(workflow);
-  const history = await client.waitForCompletion(prompt_id);
+
+  emit("generating", 15, "Generation started");
+
+  const history = await client.waitForCompletion(prompt_id, wrapComfyUIProgress(emit));
 
   if (!history || !history.outputs) {
+    emit("error", 0, "No output from workflow");
     throw new Error("No output from workflow");
   }
+
+  emit("post_processing", 85, "Processing video output");
 
   // Find video output (node "9" is VHS_VideoCombine)
   const videoOutput = history.outputs["9"] as any;
@@ -139,6 +163,7 @@ export async function lipSyncGenerate(
       (output: any) => output.images && output.images.length > 0
     );
     if (!imageOutput) {
+      emit("error", 0, "No video output found");
       throw new Error("No video or image output found in workflow result");
     }
   }
@@ -155,6 +180,7 @@ export async function lipSyncGenerate(
   // Upload to cloud storage if configured and requested
   let remote_url: string | undefined;
   if (upload_to_cloud && isCloudStorageConfigured()) {
+    emit("uploading", 90, "Uploading to cloud storage");
     try {
       const storage = getStorageProvider();
       const remotePath = generateRemotePath("videos", basename(output_path));
@@ -166,10 +192,13 @@ export async function lipSyncGenerate(
     }
   }
 
+  emit("complete", 100, "Lip-sync video generation complete");
+
   return {
     video: output_path,
     duration: duration,
     remote_url,
+    taskId,
   };
 }
 
@@ -179,8 +208,9 @@ export async function lipSyncGenerate(
  */
 export async function talk(
   rawArgs: z.input<typeof talkSchema>,
-  client: ComfyUIClient
-): Promise<{ video: string; text: string; remote_url?: string }> {
+  client: ComfyUIClient,
+  progressOptions?: ProgressOptions
+): Promise<{ video: string; text: string; remote_url?: string; taskId: string }> {
   // Parse and apply defaults
   const args = talkSchema.parse(rawArgs);
   const {
@@ -199,6 +229,13 @@ export async function talk(
     upload_to_cloud,
   } = args;
 
+  // Set up progress tracking
+  const taskId = progressOptions?.taskId ?? generateTaskId();
+  const emit = createProgressEmitter(taskId, progressOptions?.onProgress);
+
+  emit("queued", 0, "Talking avatar generation queued");
+  emit("starting", 5, "Building TTS + LipSync workflow");
+
   // Build combined workflow
   const workflow = buildTalkingAvatarWorkflow({
     text,
@@ -215,18 +252,27 @@ export async function talk(
     filenamePrefix: "ComfyUI_TalkingAvatar",
   });
 
+  emit("loading_model", 10, "Queueing workflow, loading models");
+
   // Execute workflow
   const { prompt_id } = await client.queuePrompt(workflow);
-  const history = await client.waitForCompletion(prompt_id);
+
+  emit("generating", 15, "Generation started (TTS + LipSync)");
+
+  const history = await client.waitForCompletion(prompt_id, wrapComfyUIProgress(emit));
 
   if (!history || !history.outputs) {
+    emit("error", 0, "No output from workflow");
     throw new Error("No output from workflow");
   }
+
+  emit("post_processing", 85, "Processing video output");
 
   // Find video output (node "output" is VHS_VideoCombine)
   const videoOutput = history.outputs["output"] as any;
 
   if (!videoOutput?.gifs?.[0] && !videoOutput?.videos?.[0]) {
+    emit("error", 0, "No video output found");
     throw new Error("No video output found in workflow result");
   }
 
@@ -240,6 +286,7 @@ export async function talk(
   // Upload to cloud storage if configured and requested
   let remote_url: string | undefined;
   if (upload_to_cloud && isCloudStorageConfigured()) {
+    emit("uploading", 90, "Uploading to cloud storage");
     try {
       const storage = getStorageProvider();
       const remotePath = generateRemotePath("videos", basename(output_path));
@@ -251,10 +298,13 @@ export async function talk(
     }
   }
 
+  emit("complete", 100, "Talking avatar generation complete");
+
   return {
     video: output_path,
     text,
     remote_url,
+    taskId,
   };
 }
 

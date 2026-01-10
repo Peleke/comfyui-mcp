@@ -118,7 +118,7 @@ describe("TTS Tools", () => {
       );
 
       expect(client.queuePrompt).toHaveBeenCalledTimes(1);
-      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id");
+      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id", expect.any(Function));
       expect(client.getAudio).toHaveBeenCalledWith(
         "ComfyUI_TTS_00001.wav",
         "",

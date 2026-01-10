@@ -8,6 +8,12 @@ import {
   isCloudStorageConfigured,
   generateRemotePath,
 } from "../storage/index.js";
+import {
+  ProgressOptions,
+  createProgressEmitter,
+  wrapComfyUIProgress,
+  generateTaskId,
+} from "../progress.js";
 
 // ============================================================================
 // Conventions
@@ -257,8 +263,9 @@ function buildPortraitPrompt(args: {
  */
 export async function createPortrait(
   args: z.infer<typeof createPortraitSchema>,
-  client: ComfyUIClient
-): Promise<{ image: string; prompt: string; model: string; remote_url?: string }> {
+  client: ComfyUIClient,
+  progressOptions?: ProgressOptions
+): Promise<{ image: string; prompt: string; model: string; remote_url?: string; taskId: string }> {
   const {
     description,
     style,
@@ -275,6 +282,13 @@ export async function createPortrait(
     output_path,
     upload_to_cloud,
   } = args;
+
+  // Set up progress tracking
+  const taskId = progressOptions?.taskId ?? generateTaskId();
+  const emit = createProgressEmitter(taskId, progressOptions?.onProgress);
+
+  emit("queued", 0, "Portrait generation queued");
+  emit("starting", 5, `Building ${backend} workflow`);
 
   // Build optimized portrait prompt
   const { positive: prompt, negative: negativePrompt } = buildPortraitPrompt({
@@ -333,19 +347,28 @@ export async function createPortrait(
     });
   }
 
+  emit("loading_model", 10, `Loading ${usedModel}`);
+
   // Execute workflow
   const { prompt_id } = await client.queuePrompt(workflow);
-  const history = await client.waitForCompletion(prompt_id);
+
+  emit("generating", 15, "Generating portrait");
+
+  const history = await client.waitForCompletion(prompt_id, wrapComfyUIProgress(emit));
 
   if (!history || !history.outputs) {
+    emit("error", 0, "No output from workflow");
     throw new Error("No output from workflow");
   }
+
+  emit("post_processing", 85, "Processing image output");
 
   // Find image output (different node IDs for different backends)
   const outputNodeId = backend === "sdxl" ? "9" : "save";
   const imageOutput = history.outputs[outputNodeId] as any;
 
   if (!imageOutput?.images?.[0]) {
+    emit("error", 0, "No image output found");
     throw new Error("No image output found in workflow result");
   }
 
@@ -359,6 +382,7 @@ export async function createPortrait(
   // Upload to cloud storage if configured and requested
   let remote_url: string | undefined;
   if (upload_to_cloud && isCloudStorageConfigured()) {
+    emit("uploading", 90, "Uploading to cloud storage");
     try {
       const storage = getStorageProvider();
       const remotePath = generateRemotePath("images", basename(output_path));
@@ -370,11 +394,14 @@ export async function createPortrait(
     }
   }
 
+  emit("complete", 100, "Portrait generation complete");
+
   return {
     image: output_path,
     prompt,
     model: usedModel,
     remote_url,
+    taskId,
   };
 }
 

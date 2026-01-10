@@ -339,7 +339,7 @@ describe("Avatar Tools", () => {
       );
 
       expect(client.queuePrompt).toHaveBeenCalledTimes(1);
-      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id");
+      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id", expect.any(Function));
       expect(client.getImage).toHaveBeenCalled();
       expect(result.image).toBe("/tmp/odin.png");
       expect(result.prompt).toContain("Odin");

@@ -71,13 +71,14 @@ describe("Lip-Sync Tools", () => {
 
       const result = lipSyncGenerateSchema.parse(input);
       expect(result.model).toBe("sonic");
+      expect(result.svd_checkpoint).toBe("video/svd_xt_1_1.safetensors");
       expect(result.sonic_unet).toBe("unet.pth");
       expect(result.ip_audio_scale).toBe(1.0);
       expect(result.use_interframe).toBe(true);
       expect(result.dtype).toBe("fp16");
       expect(result.min_resolution).toBe(512);
-      expect(result.duration).toBe(10.0);
-      expect(result.expand_ratio).toBe(0.5);
+      expect(result.duration).toBe(99999);
+      expect(result.expand_ratio).toBe(1);
       expect(result.inference_steps).toBe(25);
       expect(result.dynamic_scale).toBe(1.0);
       expect(result.fps).toBe(25.0);
@@ -160,9 +161,7 @@ describe("Lip-Sync Tools", () => {
         portrait_image: "portrait.png",
         speed: 1.2,
         tts_seed: 42,
-        checkpoint: "model.safetensors",
-        clip_vision: "clip.safetensors",
-        vae: "vae.safetensors",
+        svd_checkpoint: "video/svd_xt_1_1.safetensors",
         sonic_unet: "custom_unet.pth",
         inference_steps: 30,
         fps: 30.0,
@@ -200,7 +199,7 @@ describe("Lip-Sync Tools", () => {
       );
 
       expect(client.queuePrompt).toHaveBeenCalledTimes(1);
-      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id");
+      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id", expect.any(Function));
       expect(client.getVideo).toHaveBeenCalledWith(
         "ComfyUI_LipSync_00001.mp4",
         "",
@@ -424,7 +423,7 @@ describe("Lip-Sync Tools", () => {
       );
 
       expect(client.queuePrompt).toHaveBeenCalledTimes(1);
-      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id");
+      expect(client.waitForCompletion).toHaveBeenCalledWith("test-prompt-id", expect.any(Function));
       expect(client.getVideo).toHaveBeenCalled();
       expect(result.video).toBe("/tmp/talk_output.mp4");
       expect(result.text).toBe("Hello, world!");
@@ -522,9 +521,7 @@ describe("Lip-Sync Tools", () => {
           portrait_image: "portrait.png",
           speed: 1.5,
           tts_seed: 42,
-          checkpoint: "custom.safetensors",
-          clip_vision: "clip.safetensors",
-          vae: "vae.safetensors",
+          svd_checkpoint: "video/svd_xt_1_1.safetensors",
           sonic_unet: "custom_unet.pth",
           inference_steps: 30,
           fps: 30.0,
@@ -542,8 +539,8 @@ describe("Lip-Sync Tools", () => {
       expect(workflow["tts_2"].inputs.speed).toBe(1.5);
       expect(workflow["tts_2"].inputs.seed).toBe(42);
 
-      // Check lip-sync params (node "sonic_7" is SONICSampler)
-      expect(workflow["sonic_7"].inputs.inference_steps).toBe(30);
+      // Check lip-sync params (node "sonic_5" is SONICSampler)
+      expect(workflow["sonic_5"].inputs.inference_steps).toBe(30);
     });
   });
 
