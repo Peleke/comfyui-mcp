@@ -18,7 +18,7 @@ vi.mock("fs/promises", () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Mock ComfyUIClient
+// Mock ComfyUIClient - includes outputs at both "save" (Flux) and "9" (SDXL) nodes
 const createMockClient = (overrides: Partial<ComfyUIClient> = {}) => ({
   baseUrl: "http://localhost:8188",
   wsUrl: "ws://localhost:8188",
@@ -27,7 +27,16 @@ const createMockClient = (overrides: Partial<ComfyUIClient> = {}) => ({
   waitForCompletion: vi.fn().mockResolvedValue({
     status: { status_str: "success", completed: true, messages: [] },
     outputs: {
+      // Flux GGUF output node
       "save": {
+        images: [{
+          filename: "ComfyUI_Portrait_00001.png",
+          subfolder: "",
+          type: "output",
+        }],
+      },
+      // SDXL output node (node ID 9 in buildTxt2ImgWorkflow)
+      "9": {
         images: [{
           filename: "ComfyUI_Portrait_00001.png",
           subfolder: "",
@@ -87,8 +96,11 @@ describe("Avatar Tools", () => {
       const result = createPortraitSchema.parse(input);
       expect(result.style).toBe("realistic");
       expect(result.expression).toBe("neutral");
-      expect(result.guidance).toBe(2.0);
-      expect(result.steps).toBe(4);
+      expect(result.backend).toBe("sdxl");
+      expect(result.guidance).toBe(7.0);  // SDXL default
+      expect(result.steps).toBe(28);      // SDXL default
+      expect(result.width).toBe(768);
+      expect(result.height).toBe(1024);
     });
 
     it("validates style enum", () => {
@@ -300,19 +312,28 @@ describe("Avatar Tools", () => {
   });
 
   describe("createPortrait", () => {
-    it("generates portrait with Flux workflow", async () => {
+    // Helper to create base args with defaults
+    const baseArgs = {
+      width: 768,
+      height: 1024,
+      backend: "sdxl" as const,
+      style: "realistic" as const,
+      expression: "neutral" as const,
+    };
+
+    it("generates portrait with SDXL workflow", async () => {
       const client = createMockClient();
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "Odin, the All-Father, Norse god",
-          style: "realistic",
           gender: "male",
           age: "elderly",
           expression: "serious",
           output_path: "/tmp/odin.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
@@ -324,16 +345,36 @@ describe("Avatar Tools", () => {
       expect(result.prompt).toContain("Odin");
     });
 
+    it("generates portrait with Flux GGUF workflow", async () => {
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          backend: "flux_gguf",
+          description: "A warrior",
+          output_path: "/tmp/out.png",
+          guidance: 2.0,
+          steps: 4,
+        },
+        client
+      );
+
+      expect(client.queuePrompt).toHaveBeenCalledTimes(1);
+      expect(result.model).toContain("flux");
+    });
+
     it("builds appropriate prompt for realistic style", async () => {
       const client = createMockClient();
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "A warrior",
           style: "realistic",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
@@ -347,16 +388,17 @@ describe("Avatar Tools", () => {
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "A warrior",
           style: "anime",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
 
-      expect(result.prompt).toContain("Anime style");
+      expect(result.prompt).toContain("anime style portrait");
     });
 
     it("builds appropriate prompt for artistic style", async () => {
@@ -364,16 +406,35 @@ describe("Avatar Tools", () => {
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "A warrior",
           style: "artistic",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
 
-      expect(result.prompt).toContain("Artistic portrait");
+      expect(result.prompt).toContain("artistic portrait");
+    });
+
+    it("builds appropriate prompt for furry style", async () => {
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "A wolf warrior",
+          style: "furry",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(result.prompt).toContain("anthro portrait");
     });
 
     it("includes gender in prompt when specified", async () => {
@@ -381,11 +442,12 @@ describe("Avatar Tools", () => {
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "A person",
           gender: "androgynous",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
@@ -398,11 +460,12 @@ describe("Avatar Tools", () => {
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "A person",
           age: "elderly",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
@@ -415,10 +478,11 @@ describe("Avatar Tools", () => {
 
       await createPortrait(
         {
+          ...baseArgs,
           description: "Test",
           output_path: "/deep/nested/dir/portrait.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );
@@ -426,11 +490,34 @@ describe("Avatar Tools", () => {
       expect(fs.mkdir).toHaveBeenCalledWith("/deep/nested/dir", { recursive: true });
     });
 
-    it("uses custom Flux model when specified", async () => {
+    it("uses custom SDXL model when specified", async () => {
       const client = createMockClient();
 
       await createPortrait(
         {
+          ...baseArgs,
+          description: "Test",
+          model: "novaFurryXL_ilV130.safetensors",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      const queueCall = (client.queuePrompt as ReturnType<typeof vi.fn>).mock.calls[0];
+      const workflow = queueCall[0];
+      // SDXL uses CheckpointLoaderSimple at node "4" (from txt2img.json)
+      expect(workflow["4"].inputs.ckpt_name).toBe("novaFurryXL_ilV130.safetensors");
+    });
+
+    it("uses Flux GGUF model when backend is flux_gguf", async () => {
+      const client = createMockClient();
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          backend: "flux_gguf",
           description: "Test",
           model: "flux1-dev-Q8_0.gguf",
           output_path: "/tmp/out.png",
@@ -445,11 +532,13 @@ describe("Avatar Tools", () => {
       expect(workflow["unet"].inputs.unet_name).toBe("flux1-dev-Q8_0.gguf");
     });
 
-    it("respects guidance parameter", async () => {
+    it("respects guidance parameter for Flux GGUF", async () => {
       const client = createMockClient();
 
       await createPortrait(
         {
+          ...baseArgs,
+          backend: "flux_gguf",
           description: "Test",
           guidance: 3.5,
           output_path: "/tmp/out.png",
@@ -463,11 +552,13 @@ describe("Avatar Tools", () => {
       expect(workflow["guidance"].inputs.guidance).toBe(3.5);
     });
 
-    it("respects steps parameter", async () => {
+    it("respects steps parameter for Flux GGUF", async () => {
       const client = createMockClient();
 
       await createPortrait(
         {
+          ...baseArgs,
+          backend: "flux_gguf",
           description: "Test",
           steps: 25,
           output_path: "/tmp/out.png",
@@ -492,10 +583,11 @@ describe("Avatar Tools", () => {
       await expect(
         createPortrait(
           {
+            ...baseArgs,
             description: "Test",
             output_path: "/tmp/out.png",
-            guidance: 2.0,
-            steps: 4,
+            guidance: 7.0,
+            steps: 28,
           },
           client
         )
@@ -510,10 +602,11 @@ describe("Avatar Tools", () => {
       await expect(
         createPortrait(
           {
+            ...baseArgs,
             description: "Test",
             output_path: "/tmp/out.png",
-            guidance: 2.0,
-            steps: 4,
+            guidance: 7.0,
+            steps: 28,
           },
           client
         )
@@ -525,10 +618,11 @@ describe("Avatar Tools", () => {
 
       const result = await createPortrait(
         {
+          ...baseArgs,
           description: "Just a person",
           output_path: "/tmp/out.png",
-          guidance: 2.0,
-          steps: 4,
+          guidance: 7.0,
+          steps: 28,
         },
         client
       );

@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ComfyUIClient } from "../comfyui-client.js";
+import { buildTxt2ImgWorkflow } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { dirname, join } from "path";
 
 // ============================================================================
 // Conventions
@@ -25,19 +26,41 @@ export const listVoicesCatalogSchema = z.object({});
 
 export const createPortraitSchema = z.object({
   description: z.string().describe("Description of the person/character to generate"),
-  style: z.enum(["realistic", "artistic", "anime"]).optional().default("realistic")
+  style: z.enum(["realistic", "artistic", "anime", "furry"]).optional().default("realistic")
     .describe("Visual style for the portrait"),
   gender: z.enum(["male", "female", "androgynous"]).optional()
     .describe("Gender presentation (helps with prompting)"),
   age: z.string().optional().describe("Approximate age (e.g., '30s', 'elderly', 'young')"),
   expression: z.enum(["neutral", "slight_smile", "serious", "friendly"]).optional().default("neutral")
     .describe("Facial expression"),
-  // Flux-specific
-  model: z.string().optional().describe("Flux GGUF model to use (defaults to schnell)"),
-  guidance: z.number().optional().default(2.0).describe("Flux guidance scale (1-4 for realism)"),
-  steps: z.number().optional().default(4).describe("Sampling steps (4 for schnell, 20+ for dev)"),
+  // Backend selection
+  backend: z.enum(["flux_gguf", "flux_fp8", "sdxl"]).optional().default("sdxl")
+    .describe("Model backend: flux_gguf (local quant), flux_fp8 (standard), sdxl (SDXL checkpoints)"),
+  // Model specification
+  model: z.string().optional().describe("Model to use (checkpoint for SDXL, GGUF for flux_gguf)"),
+  // Generation params
+  guidance: z.number().optional().default(7.0).describe("CFG scale (2 for Flux, 7 for SDXL)"),
+  steps: z.number().optional().default(28).describe("Sampling steps"),
   seed: z.number().optional().describe("Random seed for reproducibility"),
+  width: z.number().optional().default(768).describe("Image width"),
+  height: z.number().optional().default(1024).describe("Image height (portrait orientation)"),
   output_path: z.string().describe("Full path to save the portrait image"),
+});
+
+export const batchCreatePortraitsSchema = z.object({
+  portraits: z.array(z.object({
+    description: z.string(),
+    style: z.enum(["realistic", "artistic", "anime", "furry"]).optional(),
+    gender: z.enum(["male", "female", "androgynous"]).optional(),
+    age: z.string().optional(),
+    expression: z.enum(["neutral", "slight_smile", "serious", "friendly"]).optional(),
+    model: z.string(),
+    name: z.string().describe("Unique name for this portrait (used in filename)"),
+  })).describe("List of portraits to generate"),
+  backend: z.enum(["flux_gguf", "flux_fp8", "sdxl"]).optional().default("sdxl"),
+  output_dir: z.string().describe("Directory to save all portraits"),
+  steps: z.number().optional().default(28),
+  guidance: z.number().optional().default(7.0),
 });
 
 // ============================================================================
@@ -144,35 +167,33 @@ export async function listVoicesCatalog(
 }
 
 /**
- * Generate a portrait image optimized for lip-sync using Flux
+ * Build prompt for portrait generation based on style
  */
-export async function createPortrait(
-  args: z.infer<typeof createPortraitSchema>,
-  client: ComfyUIClient
-): Promise<{ image: string; prompt: string }> {
-  const {
-    description,
-    style,
-    gender,
-    age,
-    expression,
-    model,
-    guidance,
-    steps,
-    seed,
-    output_path,
-  } = args;
+function buildPortraitPrompt(args: {
+  description: string;
+  style?: "realistic" | "artistic" | "anime" | "furry";
+  gender?: "male" | "female" | "androgynous";
+  age?: string;
+  expression?: "neutral" | "slight_smile" | "serious" | "friendly";
+}): { positive: string; negative: string } {
+  const { description, style = "realistic", gender, age, expression = "neutral" } = args;
 
-  // Build optimized portrait prompt
   const promptParts: string[] = [];
 
   // Style prefix
-  if (style === "realistic") {
-    promptParts.push("Professional portrait photograph, high resolution, 85mm lens, f/1.8");
-  } else if (style === "artistic") {
-    promptParts.push("Artistic portrait, painterly style, dramatic lighting");
-  } else if (style === "anime") {
-    promptParts.push("Anime style portrait, detailed face, clean linework");
+  switch (style) {
+    case "realistic":
+      promptParts.push("professional portrait photograph, high resolution, 85mm lens, f/1.8, studio lighting");
+      break;
+    case "artistic":
+      promptParts.push("artistic portrait, painterly style, dramatic lighting, fine art");
+      break;
+    case "anime":
+      promptParts.push("anime style portrait, detailed face, clean linework, vibrant colors, masterpiece, best quality");
+      break;
+    case "furry":
+      promptParts.push("anthro portrait, detailed fur texture, expressive eyes, professional furry art");
+      break;
   }
 
   // Core description
@@ -193,26 +214,115 @@ export async function createPortrait(
     serious: "serious expression, composed",
     friendly: "friendly expression, approachable",
   };
-  promptParts.push(expressionMap[expression || "neutral"]);
+  promptParts.push(expressionMap[expression]);
 
   // Lip-sync optimized framing
   promptParts.push("front-facing portrait, looking directly at camera, clear view of face and lips");
   promptParts.push("head and shoulders framing, centered composition");
   promptParts.push("even lighting on face, no harsh shadows");
 
-  const prompt = promptParts.join(", ");
+  // Build negative prompt based on style
+  let negative: string;
+  switch (style) {
+    case "realistic":
+      negative = "cartoon, anime, illustration, painting, bad quality, blurry, deformed, ugly, bad anatomy";
+      break;
+    case "anime":
+      negative = "photorealistic, 3d render, bad quality, worst quality, low quality, blurry, deformed";
+      break;
+    case "furry":
+      negative = "human, realistic human, bad quality, blurry, deformed, ugly, bad anatomy";
+      break;
+    default:
+      negative = "bad quality, blurry, deformed, ugly, bad anatomy";
+  }
 
-  // Build Flux workflow
-  const workflow = buildFluxPortraitWorkflow({
-    prompt,
-    model: model || "flux1-schnell-Q8_0.gguf",
-    guidance: guidance ?? 2.0,
-    steps: steps ?? 4,
-    seed: seed ?? Math.floor(Math.random() * 2147483647),
-    width: 768,
-    height: 1024, // Portrait orientation
-    filenamePrefix: "ComfyUI_Portrait",
+  return {
+    positive: promptParts.join(", "),
+    negative,
+  };
+}
+
+/**
+ * Generate a portrait image optimized for lip-sync
+ * Supports multiple backends: Flux GGUF, Flux FP8, SDXL
+ */
+export async function createPortrait(
+  args: z.infer<typeof createPortraitSchema>,
+  client: ComfyUIClient
+): Promise<{ image: string; prompt: string; model: string }> {
+  const {
+    description,
+    style,
+    gender,
+    age,
+    expression,
+    backend,
+    model,
+    guidance,
+    steps,
+    seed,
+    width,
+    height,
+    output_path,
+  } = args;
+
+  // Build optimized portrait prompt
+  const { positive: prompt, negative: negativePrompt } = buildPortraitPrompt({
+    description,
+    style,
+    gender,
+    age,
+    expression,
   });
+
+  const actualSeed = seed ?? Math.floor(Math.random() * 2147483647);
+  let workflow: Record<string, any>;
+  let usedModel: string;
+
+  if (backend === "flux_gguf") {
+    // Flux GGUF workflow (for local quant models)
+    usedModel = model || "flux1-schnell-Q8_0.gguf";
+    workflow = buildFluxGGUFWorkflow({
+      prompt,
+      model: usedModel,
+      guidance: guidance ?? 2.0,
+      steps: steps ?? 4,
+      seed: actualSeed,
+      width: width ?? 768,
+      height: height ?? 1024,
+      filenamePrefix: "ComfyUI_Portrait",
+    });
+  } else if (backend === "flux_fp8") {
+    // Standard Flux workflow (flux1-schnell-fp8.safetensors)
+    usedModel = model || "flux1-schnell-fp8.safetensors";
+    workflow = buildFluxFP8Workflow({
+      prompt,
+      model: usedModel,
+      guidance: guidance ?? 2.0,
+      steps: steps ?? 4,
+      seed: actualSeed,
+      width: width ?? 768,
+      height: height ?? 1024,
+      filenamePrefix: "ComfyUI_Portrait",
+    });
+  } else {
+    // SDXL workflow (standard checkpoints like novaFurry, yiffinhell, perfectdeliberate)
+    usedModel = model || "perfectdeliberate_v50.safetensors";
+    workflow = buildTxt2ImgWorkflow({
+      prompt,
+      negativePrompt,
+      model: usedModel,
+      steps: steps ?? 28,
+      cfgScale: guidance ?? 7.0,
+      seed: actualSeed,
+      width: width ?? 768,
+      height: height ?? 1024,
+      sampler: "euler_ancestral",
+      scheduler: "normal",
+      filenamePrefix: "ComfyUI_Portrait",
+    });
+  }
 
   // Execute workflow
   const { prompt_id } = await client.queuePrompt(workflow);
@@ -222,8 +332,9 @@ export async function createPortrait(
     throw new Error("No output from workflow");
   }
 
-  // Find image output
-  const imageOutput = history.outputs["save"] as any;
+  // Find image output (different node IDs for different backends)
+  const outputNodeId = backend === "sdxl" ? "9" : "save";
+  const imageOutput = history.outputs[outputNodeId] as any;
 
   if (!imageOutput?.images?.[0]) {
     throw new Error("No image output found in workflow result");
@@ -239,14 +350,106 @@ export async function createPortrait(
   return {
     image: output_path,
     prompt,
+    model: usedModel,
+  };
+}
+
+/**
+ * Batch generate multiple portraits with different models
+ * Perfect for testing or creating a library of talking heads
+ */
+export async function batchCreatePortraits(
+  args: z.infer<typeof batchCreatePortraitsSchema>,
+  client: ComfyUIClient
+): Promise<{
+  results: Array<{
+    name: string;
+    image: string;
+    prompt: string;
+    model: string;
+    success: boolean;
+    error?: string;
+  }>;
+  summary: {
+    total: number;
+    succeeded: number;
+    failed: number;
+  };
+}> {
+  const { portraits, backend, output_dir, steps, guidance } = args;
+
+  await mkdir(output_dir, { recursive: true });
+
+  const results: Array<{
+    name: string;
+    image: string;
+    prompt: string;
+    model: string;
+    success: boolean;
+    error?: string;
+  }> = [];
+
+  for (const portrait of portraits) {
+    const outputPath = join(output_dir, `${portrait.name}.png`);
+
+    try {
+      const result = await createPortrait(
+        {
+          description: portrait.description,
+          style: portrait.style ?? "realistic",
+          gender: portrait.gender,
+          age: portrait.age,
+          expression: portrait.expression ?? "neutral",
+          backend,
+          model: portrait.model,
+          steps,
+          guidance,
+          width: 768,
+          height: 1024,
+          output_path: outputPath,
+        },
+        client
+      );
+
+      results.push({
+        name: portrait.name,
+        image: result.image,
+        prompt: result.prompt,
+        model: result.model,
+        success: true,
+      });
+
+      console.error(`Generated: ${portrait.name} with ${portrait.model}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({
+        name: portrait.name,
+        image: outputPath,
+        prompt: "",
+        model: portrait.model,
+        success: false,
+        error: message,
+      });
+
+      console.error(`Failed: ${portrait.name} - ${message}`);
+    }
+  }
+
+  return {
+    results,
+    summary: {
+      total: portraits.length,
+      succeeded: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
+    },
   };
 }
 
 // ============================================================================
-// Flux Workflow Builder
+// Workflow Builders
 // ============================================================================
 
-interface FluxPortraitParams {
+interface FluxWorkflowParams {
   prompt: string;
   model: string;
   guidance: number;
@@ -257,7 +460,10 @@ interface FluxPortraitParams {
   filenamePrefix: string;
 }
 
-function buildFluxPortraitWorkflow(params: FluxPortraitParams): Record<string, any> {
+/**
+ * Build Flux GGUF workflow (for quantized models)
+ */
+function buildFluxGGUFWorkflow(params: FluxWorkflowParams): Record<string, any> {
   return {
     // Load GGUF Flux model
     "unet": {
@@ -367,6 +573,116 @@ function buildFluxPortraitWorkflow(params: FluxPortraitParams): Record<string, a
       inputs: {
         samples: ["sampler", 0],
         vae: ["vae", 0],
+      },
+    },
+
+    // Save image
+    "save": {
+      class_type: "SaveImage",
+      inputs: {
+        images: ["decode", 0],
+        filename_prefix: params.filenamePrefix,
+      },
+    },
+  };
+}
+
+/**
+ * Build Flux FP8 workflow (for full precision flux checkpoints)
+ * Uses CheckpointLoaderSimple instead of UnetLoaderGGUF
+ */
+function buildFluxFP8Workflow(params: FluxWorkflowParams): Record<string, any> {
+  return {
+    // Load Flux checkpoint
+    "checkpoint": {
+      class_type: "CheckpointLoaderSimple",
+      inputs: {
+        ckpt_name: params.model,
+      },
+    },
+
+    // Encode prompt using CLIP from checkpoint
+    "prompt": {
+      class_type: "CLIPTextEncode",
+      inputs: {
+        clip: ["checkpoint", 1],
+        text: params.prompt,
+      },
+    },
+
+    // Flux guidance
+    "guidance": {
+      class_type: "FluxGuidance",
+      inputs: {
+        conditioning: ["prompt", 0],
+        guidance: params.guidance,
+      },
+    },
+
+    // Create empty latent
+    "latent": {
+      class_type: "EmptySD3LatentImage",
+      inputs: {
+        width: params.width,
+        height: params.height,
+        batch_size: 1,
+      },
+    },
+
+    // Random noise
+    "noise": {
+      class_type: "RandomNoise",
+      inputs: {
+        noise_seed: params.seed,
+      },
+    },
+
+    // Sampler selection
+    "sampler_select": {
+      class_type: "KSamplerSelect",
+      inputs: {
+        sampler_name: "euler",
+      },
+    },
+
+    // Scheduler
+    "scheduler": {
+      class_type: "BasicScheduler",
+      inputs: {
+        model: ["checkpoint", 0],
+        scheduler: "simple",
+        steps: params.steps,
+        denoise: 1.0,
+      },
+    },
+
+    // Guider
+    "guider": {
+      class_type: "BasicGuider",
+      inputs: {
+        model: ["checkpoint", 0],
+        conditioning: ["guidance", 0],
+      },
+    },
+
+    // Advanced sampler
+    "sampler": {
+      class_type: "SamplerCustomAdvanced",
+      inputs: {
+        noise: ["noise", 0],
+        guider: ["guider", 0],
+        sampler: ["sampler_select", 0],
+        sigmas: ["scheduler", 0],
+        latent_image: ["latent", 0],
+      },
+    },
+
+    // Decode latent
+    "decode": {
+      class_type: "VAEDecode",
+      inputs: {
+        samples: ["sampler", 0],
+        vae: ["checkpoint", 2],
       },
     },
 

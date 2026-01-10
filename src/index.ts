@@ -55,6 +55,8 @@ import {
   listVoicesCatalogSchema,
   createPortrait,
   createPortraitSchema,
+  batchCreatePortraits,
+  batchCreatePortraitsSchema,
 } from "./tools/avatar.js";
 
 // Configuration from environment
@@ -1137,7 +1139,7 @@ const TOOLS = [
   {
     name: "create_portrait",
     description:
-      "Generate a portrait image optimized for lip-sync using Flux. Creates front-facing, well-lit portraits suitable for the talk() pipeline.",
+      "Generate a portrait image optimized for lip-sync. Supports multiple backends: Flux GGUF (local quant), Flux FP8 (standard), or SDXL checkpoints (novaFurry, yiffinhell, perfectdeliberate, etc.)",
     inputSchema: {
       type: "object",
       properties: {
@@ -1147,7 +1149,7 @@ const TOOLS = [
         },
         style: {
           type: "string",
-          enum: ["realistic", "artistic", "anime"],
+          enum: ["realistic", "artistic", "anime", "furry"],
           description: "Visual style (default: realistic)",
         },
         gender: {
@@ -1164,17 +1166,30 @@ const TOOLS = [
           enum: ["neutral", "slight_smile", "serious", "friendly"],
           description: "Facial expression (default: neutral)",
         },
+        backend: {
+          type: "string",
+          enum: ["flux_gguf", "flux_fp8", "sdxl"],
+          description: "Model backend: flux_gguf (local quant), flux_fp8 (standard Flux), sdxl (SDXL checkpoints). Default: sdxl",
+        },
         model: {
           type: "string",
-          description: "Flux GGUF model to use (default: flux1-schnell-Q8_0.gguf)",
+          description: "Model to use. For sdxl: checkpoint name. For flux_gguf: GGUF file. For flux_fp8: Flux checkpoint.",
         },
         guidance: {
           type: "number",
-          description: "Flux guidance scale (default: 2.0, use 1-4 for realism)",
+          description: "CFG scale (default: 7 for SDXL, 2 for Flux)",
         },
         steps: {
           type: "number",
-          description: "Sampling steps (default: 4 for schnell, use 20+ for dev)",
+          description: "Sampling steps (default: 28 for SDXL, 4 for Flux schnell)",
+        },
+        width: {
+          type: "number",
+          description: "Image width (default: 768)",
+        },
+        height: {
+          type: "number",
+          description: "Image height (default: 1024 for portrait orientation)",
         },
         seed: {
           type: "number",
@@ -1186,6 +1201,51 @@ const TOOLS = [
         },
       },
       required: ["description", "output_path"],
+    },
+  },
+  {
+    name: "batch_create_portraits",
+    description:
+      "Generate multiple portraits in batch using different models. Perfect for creating a library of talking heads or testing different styles.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        portraits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              description: { type: "string", description: "Character description" },
+              style: { type: "string", enum: ["realistic", "artistic", "anime", "furry"] },
+              gender: { type: "string", enum: ["male", "female", "androgynous"] },
+              age: { type: "string" },
+              expression: { type: "string", enum: ["neutral", "slight_smile", "serious", "friendly"] },
+              model: { type: "string", description: "Checkpoint model to use" },
+              name: { type: "string", description: "Unique name for this portrait (used in filename)" },
+            },
+            required: ["description", "model", "name"],
+          },
+          description: "List of portraits to generate",
+        },
+        backend: {
+          type: "string",
+          enum: ["flux_gguf", "flux_fp8", "sdxl"],
+          description: "Model backend (default: sdxl)",
+        },
+        output_dir: {
+          type: "string",
+          description: "Directory to save all portraits",
+        },
+        steps: {
+          type: "number",
+          description: "Sampling steps (default: 28)",
+        },
+        guidance: {
+          type: "number",
+          description: "CFG scale (default: 7)",
+        },
+      },
+      required: ["portraits", "output_dir"],
     },
   },
 ];
@@ -1672,6 +1732,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "create_portrait": {
         const validatedArgs = createPortraitSchema.parse(args);
         const result = await createPortrait(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "batch_create_portraits": {
+        const validatedArgs = batchCreatePortraitsSchema.parse(args);
+        const result = await batchCreatePortraits(validatedArgs, client);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
