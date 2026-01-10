@@ -21,7 +21,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "RUN_E2E=true vitest run src/tools/e2e.test.ts --reporter=verbose"
+    "test:e2e": "RUN_E2E=true vitest run src/tools/e2e.test.ts --reporter=verbose",
+    "e2e:smoke": "tsx src/e2e/smoke-test.ts",
+    "e2e:gpu": "tsx src/e2e/gpu-pipeline.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.14.0",
