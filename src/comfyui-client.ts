@@ -26,6 +26,24 @@ export interface QueueStatus {
   queue_pending: any[];
 }
 
+export interface SystemStats {
+  system: {
+    os: string;
+    python_version: string;
+    embedded_python: boolean;
+    comfyui_version?: string;
+  };
+  devices: Array<{
+    name: string;
+    type: string;
+    index: number;
+    vram_total: number;
+    vram_free: number;
+    torch_vram_total: number;
+    torch_vram_free: number;
+  }>;
+}
+
 // Minimal fetch options to avoid aiohttp's 8KB header limit
 // Node.js fetch can sometimes include large default headers or proxy headers
 const FETCH_OPTIONS: RequestInit = {
@@ -104,6 +122,14 @@ export class ComfyUIClient {
     const response = await fetch(`${this.baseUrl}/queue`, GET_OPTIONS);
     if (!response.ok) {
       throw new Error(`Failed to get queue: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async getSystemStats(): Promise<SystemStats> {
+    const response = await fetch(`${this.baseUrl}/system_stats`, GET_OPTIONS);
+    if (!response.ok) {
+      throw new Error(`Failed to get system stats: ${response.status}`);
     }
     return response.json();
   }
