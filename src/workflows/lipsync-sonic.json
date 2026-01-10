@@ -1,0 +1,78 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "clip_vision_g.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "sdxl_vae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "portrait.png"
+    }
+  },
+  "5": {
+    "class_type": "LoadAudio",
+    "inputs": {
+      "audio": "speech.wav"
+    }
+  },
+  "6": {
+    "class_type": "SONICTLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "sonic_unet": "unet.pth",
+      "ip_audio_scale": 1.0,
+      "use_interframe": true,
+      "dtype": "fp16"
+    }
+  },
+  "7": {
+    "class_type": "SONIC_PreData",
+    "inputs": {
+      "clip_vision": ["2", 0],
+      "vae": ["3", 0],
+      "audio": ["5", 0],
+      "image": ["4", 0],
+      "weight_dtype": ["6", 1],
+      "min_resolution": 512,
+      "duration": 10.0,
+      "expand_ratio": 0.5
+    }
+  },
+  "8": {
+    "class_type": "SONICSampler",
+    "inputs": {
+      "model": ["6", 0],
+      "data_dict": ["7", 0],
+      "seed": 0,
+      "inference_steps": 25,
+      "dynamic_scale": 1.0,
+      "fps": 25.0
+    }
+  },
+  "9": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["8", 0],
+      "frame_rate": ["8", 1],
+      "loop_count": 0,
+      "filename_prefix": "ComfyUI_LipSync",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
