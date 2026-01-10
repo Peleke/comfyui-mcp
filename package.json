@@ -1,9 +1,19 @@
 {
-  "name": "comfyui-mcp",
+  "name": "@peleke/comfyui-mcp",
   "version": "1.0.0",
   "description": "MCP server for ComfyUI image generation",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "comfyui-mcp": "./dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Peleke/comfyui-mcp.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
