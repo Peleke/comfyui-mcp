@@ -20,8 +20,12 @@ jobs:
           registry-url: 'https://npm.pkg.github.com'
           scope: '@peleke'
 
+      # Override repo .npmrc with proper auth config
+      - name: Configure npm auth
+        run: |
+          echo "@peleke:registry=https://npm.pkg.github.com" > .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+
       - run: npm ci
       - run: npm run build
       - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
