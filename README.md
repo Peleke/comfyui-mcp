@@ -14,6 +14,10 @@ Claude: I'll generate that image for you.
 
 ## Features
 
+- **🎨 Imagine Tool**: The ultimate generation tool—describe what you want in natural language and get optimized results with auto-detected model settings
+- **Smart Prompting**: Auto-generates optimized prompts based on your model (Illustrious, Pony, Flux, SDXL, Realistic, SD1.5)
+- **Pipeline Execution**: Chain txt2img → hi-res fix → upscale in a single command
+- **Quality Presets**: From "draft" (fast) to "ultra" (full pipeline with upscaling)
 - **Text-to-Image**: Generate images from text prompts with full parameter control
 - **Image-to-Image**: Transform existing images with AI guidance
 - **AI Upscaling**: Enhance resolution using RealESRGAN and other models
@@ -39,14 +43,14 @@ npm install
 
 ### 2. Configure Claude Code
 
-Add to `.claude/settings.local.json`:
+Add to `~/.claude/settings.json` (global) or `.claude/settings.local.json` (project-specific):
 
 ```json
 {
   "mcpServers": {
     "comfyui": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/comfyui-mcp/src/index.ts"],
+      "args": ["-y", "tsx", "/absolute/path/to/comfyui-mcp/src/index.ts"],
       "env": {
         "COMFYUI_URL": "http://localhost:8188",
         "COMFYUI_MODEL": "dreamshaper_8.safetensors"
@@ -56,13 +60,19 @@ Add to `.claude/settings.local.json`:
 }
 ```
 
+> **Note**: Replace `/absolute/path/to/comfyui-mcp` with the actual path where you cloned this repo.
+
 ### 3. Start ComfyUI
 
 Ensure ComfyUI is running at the configured URL (default: http://localhost:8188).
 
-### 4. Generate Images
+### 4. Restart Claude Code
 
-Restart Claude Code and start generating:
+**Important**: Claude Code loads MCP servers at startup. You must restart Claude Code (exit and relaunch) after adding the configuration.
+
+### 5. Generate Images
+
+Start generating:
 
 ```
 "Generate a portrait with warm lighting and save it to ./images/portrait.png"
@@ -133,7 +143,86 @@ Upscale an image using AI upscaling models.
 | list_upscale_models | Upscaling models (RealESRGAN, etc.) |
 | get_queue_status | Running and pending jobs |
 
+### 🎨 imagine (Recommended!)
+
+**The easiest way to generate images.** Describe what you want in natural language, and it handles everything: auto-detects your model family, crafts optimized prompts, applies quality presets, and runs the full pipeline.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| description | string | required | Natural language description of what to generate |
+| output_path | string | required | Where to save the final image |
+| model | string | env default | Checkpoint model (auto-detected if not set) |
+| model_family | string | auto | "illustrious", "pony", "flux", "sdxl", "realistic", "sd15" |
+| style | string | none | "anime", "cinematic", "portrait", "landscape", etc. |
+| artist_reference | string | none | Artist style, e.g., "studio ghibli" |
+| quality | string | "standard" | "draft", "standard", "high", "ultra" |
+| loras | array | none | LoRAs to apply |
+| seed | number | random | For reproducibility |
+
+**Quality presets:**
+- `draft`: Fast generation, txt2img only
+- `standard`: Balanced quality (default)
+- `high`: Includes hi-res fix pass
+- `ultra`: Full pipeline with hi-res fix + upscaling
+
+### execute_pipeline
+
+Run a multi-step generation pipeline: txt2img → hi-res fix → upscale.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| prompt | string | required | The positive prompt |
+| model | string | required | Checkpoint model |
+| output_path | string | required | Final output location |
+| enable_hires_fix | bool | false | Add img2img refinement pass |
+| hires_denoise | number | 0.4 | Denoise for hi-res (0.3-0.5 recommended) |
+| enable_upscale | bool | false | Add AI upscaling step |
+| *(plus all txt2img params)* | | | |
+
+### craft_prompt
+
+Generate an optimized prompt from a natural description. Useful when you want to see/edit the prompt before generating.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| description | string | required | Natural language description |
+| model_name | string | none | For auto-detection of model family |
+| model_family | string | auto | Explicit family override |
+| style | string | none | Style preset to apply |
+| rating | string | "safe" | Content rating (for Pony models) |
+
+Returns: optimized positive prompt, negative prompt, recommended settings, LoRA suggestions.
+
+### get_prompting_guide
+
+Get tips and example prompts for a specific model family.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| model_family | string | yes | "illustrious", "pony", "flux", etc. |
+
+### list_prompting_strategies
+
+List all supported model families and their prompting characteristics.
+
 ## Usage Examples
+
+### Using Imagine (Recommended)
+
+```
+"Imagine a cozy coffee shop with warm lighting and plants,
+save to ./assets/coffee_shop.png with high quality"
+```
+
+```
+"Create an anime-style portrait of a warrior princess in a
+fantasy setting, style: anime, quality: ultra"
+```
+
+```
+"Generate a professional product photo of a sneaker on white
+background using my realistic model, artist reference: apple product photography"
+```
 
 ### Basic Generation
 
@@ -213,20 +302,37 @@ Our server dynamically constructs these graphs based on your parameters. When yo
 ```
 comfyui-mcp/
 ├── src/
-│   ├── index.ts              # MCP server entry point
+│   ├── index.ts              # MCP server entry point (15 tools)
 │   ├── comfyui-client.ts     # ComfyUI REST/WebSocket client
 │   ├── workflows/
 │   │   ├── txt2img.json      # Text-to-image template
 │   │   ├── img2img.json      # Image-to-image template
 │   │   ├── upscale.json      # Upscaling template
 │   │   └── builder.ts        # Workflow parameterization & LoRA injection
+│   ├── prompting/            # Smart prompt generation system
+│   │   ├── generator.ts      # Main PromptGenerator class
+│   │   ├── model-detection.ts# Auto-detect model family
+│   │   ├── types.ts          # Type definitions
+│   │   └── strategies/       # Per-model prompting strategies
+│   │       ├── illustrious.ts
+│   │       ├── pony.ts
+│   │       ├── flux.ts
+│   │       ├── sdxl.ts
+│   │       ├── realistic.ts
+│   │       └── sd15.ts
 │   └── tools/
+│       ├── imagine.ts        # 🎨 Main generation tool
+│       ├── pipeline.ts       # Multi-step pipeline executor
+│       ├── craft-prompt.ts   # Prompt optimization tool
 │       ├── generate.ts       # generate_image, img2img
 │       ├── upscale.ts        # upscale_image, list_upscale_models
 │       ├── list-models.ts    # Model discovery tools
 │       └── queue-status.ts   # Queue monitoring
+├── docs/
+│   └── UAT.md                # User acceptance testing guide
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts          # Test configuration
 ├── ARTICLE.md                # Full tutorial article
 └── README.md
 ```
@@ -245,9 +351,26 @@ npm run build
 
 # Run production build
 npm start
+
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage
+npm run test:coverage
 ```
 
+**148 tests** covering all tools, prompting strategies, and pipeline execution.
+
 ## Troubleshooting
+
+### Tools not showing in Claude Code
+1. Ensure you've restarted Claude Code after adding the MCP configuration
+2. Check that the path to `src/index.ts` is absolute and correct
+3. Verify the server starts manually: `npx tsx /path/to/src/index.ts` (should print "ComfyUI MCP server running on stdio")
+4. Try killing all Claude Code instances and restarting fresh
 
 ### "Connection refused"
 Ensure ComfyUI is running at the configured COMFYUI_URL.
@@ -272,6 +395,25 @@ The codebase is designed for extension:
 - **Inpainting**: Extend img2img with mask support
 - **Video**: ComfyUI supports AnimateDiff—same workflow pattern applies
 - **Custom nodes**: Any ComfyUI custom node can be integrated into workflow templates
+
+## Cloud Deployment (RunPod)
+
+Don't have a local GPU? Run ComfyUI on RunPod and connect remotely.
+
+### Quick Start
+
+1. Create a RunPod pod with PyTorch template
+2. SSH in and run:
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/deploy/quick-deploy.sh | bash -s -- --dreamshaper
+```
+3. Get your pod URL: `https://<POD_ID>-8188.proxy.runpod.net`
+4. Configure locally:
+```bash
+./deploy/scripts/configure-local.sh https://<POD_ID>-8188.proxy.runpod.net
+```
+
+See [deploy/README.md](./deploy/README.md) for detailed instructions.
 
 ## Related
 

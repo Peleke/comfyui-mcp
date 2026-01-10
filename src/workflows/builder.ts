@@ -578,9 +578,7 @@ export interface LipSyncParams {
   audio: string;
   model?: LipSyncModel;
   // SONIC-specific
-  checkpoint?: string;
-  clipVision?: string;
-  vae?: string;
+  svdCheckpoint?: string; // SVD checkpoint (provides MODEL, CLIP_VISION, VAE)
   sonicUnet?: string;
   ipAudioScale?: number;
   useInterframe?: boolean;
@@ -597,23 +595,14 @@ export interface LipSyncParams {
 
 /**
  * Build a SONIC lip-sync workflow
+ * Uses ImageOnlyCheckpointLoader with SVD model which provides MODEL, CLIP_VISION, and VAE
  */
 export function buildLipSyncWorkflow(params: LipSyncParams): Record<string, any> {
   const workflow = JSON.parse(JSON.stringify(baseLipSyncWorkflow));
 
-  // Set checkpoint model (required for SONIC base model)
-  if (params.checkpoint) {
-    workflow["1"].inputs.ckpt_name = params.checkpoint;
-  }
-
-  // Set CLIP Vision model
-  if (params.clipVision) {
-    workflow["2"].inputs.clip_name = params.clipVision;
-  }
-
-  // Set VAE
-  if (params.vae) {
-    workflow["3"].inputs.vae_name = params.vae;
+  // Set SVD checkpoint (provides MODEL, CLIP_VISION, VAE all in one)
+  if (params.svdCheckpoint) {
+    workflow["1"].inputs.ckpt_name = params.svdCheckpoint;
   }
 
   // Set portrait image
@@ -630,8 +619,8 @@ export function buildLipSyncWorkflow(params: LipSyncParams): Record<string, any>
 
   // SONIC PreData settings
   workflow["7"].inputs.min_resolution = params.minResolution ?? 512;
-  workflow["7"].inputs.duration = params.duration ?? 10.0;
-  workflow["7"].inputs.expand_ratio = params.expandRatio ?? 0.5;
+  workflow["7"].inputs.duration = params.duration ?? 99999; // Use audio length by default
+  workflow["7"].inputs.expand_ratio = params.expandRatio ?? 1;
 
   // SONIC Sampler settings
   workflow["8"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
@@ -648,6 +637,7 @@ export function buildLipSyncWorkflow(params: LipSyncParams): Record<string, any>
 /**
  * Build a combined TTS + LipSync workflow (full pipeline)
  * This chains TTS output directly into SONIC
+ * Uses ImageOnlyCheckpointLoader with SVD model for SONIC
  */
 export function buildTalkingAvatarWorkflow(params: {
   text: string;
@@ -658,9 +648,7 @@ export function buildTalkingAvatarWorkflow(params: {
   speed?: number;
   ttsSeed?: number;
   // LipSync params
-  checkpoint?: string;
-  clipVision?: string;
-  vae?: string;
+  svdCheckpoint?: string; // SVD checkpoint for SONIC
   sonicUnet?: string;
   inferenceSteps?: number;
   fps?: number;
@@ -695,32 +683,16 @@ export function buildTalkingAvatarWorkflow(params: {
   };
 
   // ===== SONIC LipSync Nodes =====
-  // Load checkpoint for SONIC base
+  // ImageOnlyCheckpointLoader with SVD - provides MODEL, CLIP_VISION, VAE
   workflow["sonic_1"] = {
-    class_type: "CheckpointLoaderSimple",
+    class_type: "ImageOnlyCheckpointLoader",
     inputs: {
-      ckpt_name: params.checkpoint || "sd_xl_base_1.0.safetensors",
-    },
-  };
-
-  // Load CLIP Vision
-  workflow["sonic_2"] = {
-    class_type: "CLIPVisionLoader",
-    inputs: {
-      clip_name: params.clipVision || "clip_vision_g.safetensors",
-    },
-  };
-
-  // Load VAE
-  workflow["sonic_3"] = {
-    class_type: "VAELoader",
-    inputs: {
-      vae_name: params.vae || "sdxl_vae.safetensors",
+      ckpt_name: params.svdCheckpoint || "video/svd_xt_1_1.safetensors",
     },
   };
 
   // Load portrait image
-  workflow["sonic_4"] = {
+  workflow["sonic_2"] = {
     class_type: "LoadImage",
     inputs: {
       image: params.portraitImage,
@@ -728,7 +700,7 @@ export function buildTalkingAvatarWorkflow(params: {
   };
 
   // SONIC Loader
-  workflow["sonic_5"] = {
+  workflow["sonic_3"] = {
     class_type: "SONICTLoader",
     inputs: {
       model: ["sonic_1", 0],
@@ -740,27 +712,27 @@ export function buildTalkingAvatarWorkflow(params: {
   };
 
   // SONIC PreData - connects TTS audio output to lip-sync
-  workflow["sonic_6"] = {
+  workflow["sonic_4"] = {
     class_type: "SONIC_PreData",
     inputs: {
-      clip_vision: ["sonic_2", 0],
-      vae: ["sonic_3", 0],
-      audio: ["tts_2", 0], // TTS output feeds into lip-sync
-      image: ["sonic_4", 0],
-      weight_dtype: ["sonic_5", 1],
+      clip_vision: ["sonic_1", 1], // CLIP_VISION from SVD checkpoint
+      vae: ["sonic_1", 2],         // VAE from SVD checkpoint
+      audio: ["tts_2", 0],         // TTS output feeds into lip-sync
+      image: ["sonic_2", 0],
       min_resolution: 512,
-      duration: 30.0, // Allow longer clips
-      expand_ratio: 0.5,
+      duration: 99999, // Use audio length
+      expand_ratio: 1,
     },
   };
 
   // SONIC Sampler
-  workflow["sonic_7"] = {
+  workflow["sonic_5"] = {
     class_type: "SONICSampler",
     inputs: {
-      model: ["sonic_5", 0],
-      data_dict: ["sonic_6", 0],
+      model: ["sonic_3", 0],
+      data_dict: ["sonic_4", 0],
       seed: params.lipSyncSeed ?? Math.floor(Math.random() * 2147483647),
+      randomize: "randomize",
       inference_steps: params.inferenceSteps ?? 25,
       dynamic_scale: 1.0,
       fps: params.fps ?? 25.0,
@@ -771,8 +743,9 @@ export function buildTalkingAvatarWorkflow(params: {
   workflow["output"] = {
     class_type: "VHS_VideoCombine",
     inputs: {
-      images: ["sonic_7", 0],
-      frame_rate: ["sonic_7", 1],
+      images: ["sonic_5", 0],
+      audio: ["tts_2", 0], // Include TTS audio in video
+      frame_rate: ["sonic_5", 1],
       loop_count: 0,
       filename_prefix: params.filenamePrefix || "ComfyUI_TalkingAvatar",
       format: "video/h264-mp4",

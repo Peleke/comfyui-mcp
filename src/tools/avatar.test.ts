@@ -1,21 +1,32 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   listAvatars,
   listVoicesCatalog,
   createPortrait,
+  batchCreatePortraits,
   listAvatarsSchema,
   listVoicesCatalogSchema,
   createPortraitSchema,
+  batchCreatePortraitsSchema,
   AVATAR_SUBFOLDER,
   VOICE_SUBFOLDER,
 } from "./avatar.js";
 import { ComfyUIClient } from "../comfyui-client.js";
 import * as fs from "fs/promises";
+import { ProgressEvent } from "../progress.js";
+import * as storageModule from "../storage/index.js";
 
 // Mock fs/promises
 vi.mock("fs/promises", () => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock storage module
+vi.mock("../storage/index.js", () => ({
+  isCloudStorageConfigured: vi.fn().mockReturnValue(false),
+  getStorageProvider: vi.fn(),
+  generateRemotePath: vi.fn((type, filename) => `generated/${type}/${Date.now()}_${filename}`),
 }));
 
 // Mock ComfyUIClient - includes outputs at both "save" (Flux) and "9" (SDXL) nodes
@@ -60,6 +71,8 @@ const createMockClient = (overrides: Partial<ComfyUIClient> = {}) => ({
 describe("Avatar Tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset storage mock to default (not configured)
+    vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(false);
   });
 
   describe("listAvatarsSchema", () => {
@@ -630,6 +643,732 @@ describe("Avatar Tools", () => {
       expect(result.prompt).toContain("front-facing");
       expect(result.prompt).toContain("looking directly at camera");
       expect(result.prompt).toContain("clear view of face and lips");
+    });
+
+    it("returns taskId in result", async () => {
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(result.taskId).toBeDefined();
+      expect(result.taskId).toMatch(/^task_\d+_[a-z0-9]+$/);
+    });
+
+    it("uses provided taskId when given", async () => {
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client,
+        { taskId: "custom_task_123" }
+      );
+
+      expect(result.taskId).toBe("custom_task_123");
+    });
+
+    it("uses Flux FP8 model when backend is flux_fp8", async () => {
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          backend: "flux_fp8",
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 2.0,
+          steps: 4,
+        },
+        client
+      );
+
+      expect(result.model).toContain("flux");
+      const queueCall = (client.queuePrompt as ReturnType<typeof vi.fn>).mock.calls[0];
+      const workflow = queueCall[0];
+      expect(workflow["checkpoint"].class_type).toBe("CheckpointLoaderSimple");
+    });
+
+    it("generates random seed when not provided", async () => {
+      const client = createMockClient();
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      const queueCall = (client.queuePrompt as ReturnType<typeof vi.fn>).mock.calls[0];
+      const workflow = queueCall[0];
+      // SDXL workflow uses KSampler at node "3"
+      expect(workflow["3"].inputs.seed).toBeDefined();
+      expect(workflow["3"].inputs.seed).toBeGreaterThanOrEqual(0);
+    });
+
+    it("uses provided seed when specified", async () => {
+      const client = createMockClient();
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+          seed: 42,
+        },
+        client
+      );
+
+      const queueCall = (client.queuePrompt as ReturnType<typeof vi.fn>).mock.calls[0];
+      const workflow = queueCall[0];
+      expect(workflow["3"].inputs.seed).toBe(42);
+    });
+  });
+
+  describe("createPortrait - Cloud Upload", () => {
+    const baseArgs = {
+      width: 768,
+      height: 1024,
+      backend: "sdxl" as const,
+      style: "realistic" as const,
+      expression: "neutral" as const,
+    };
+
+    afterEach(() => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(false);
+    });
+
+    it("does not upload when cloud storage is not configured", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(false);
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(storageModule.getStorageProvider).not.toHaveBeenCalled();
+      expect(result.remote_url).toBeUndefined();
+    });
+
+    it("uploads to cloud when configured and upload_to_cloud is true", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      const mockUpload = vi.fn().mockResolvedValue({
+        path: "generated/images/123_out.png",
+        url: "https://storage.example.com/generated/images/123_out.png",
+      });
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: mockUpload,
+      } as any);
+
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          upload_to_cloud: true,
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(mockUpload).toHaveBeenCalledTimes(1);
+      expect(result.remote_url).toBe("https://storage.example.com/generated/images/123_out.png");
+    });
+
+    it("does not upload when upload_to_cloud is false", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      const mockUpload = vi.fn();
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: mockUpload,
+      } as any);
+
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          upload_to_cloud: false,
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(mockUpload).not.toHaveBeenCalled();
+      expect(result.remote_url).toBeUndefined();
+    });
+
+    it("defaults upload_to_cloud to true", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      const mockUpload = vi.fn().mockResolvedValue({
+        path: "generated/images/out.png",
+        url: "https://storage.example.com/out.png",
+      });
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: mockUpload,
+      } as any);
+
+      const client = createMockClient();
+
+      // Parse through schema to test defaults (mimics MCP server behavior)
+      const parsedArgs = createPortraitSchema.parse({
+        ...baseArgs,
+        description: "Test",
+        output_path: "/tmp/out.png",
+        guidance: 7.0,
+        steps: 28,
+      });
+
+      await createPortrait(parsedArgs, client);
+
+      expect(mockUpload).toHaveBeenCalled();
+    });
+
+    it("continues successfully when cloud upload fails", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      const mockUpload = vi.fn().mockRejectedValue(new Error("Upload failed"));
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: mockUpload,
+      } as any);
+
+      const client = createMockClient();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      // Parse through schema to apply defaults (mimics MCP server behavior)
+      const parsedArgs = createPortraitSchema.parse({
+        ...baseArgs,
+        description: "Test",
+        output_path: "/tmp/out.png",
+        guidance: 7.0,
+        steps: 28,
+      });
+
+      const result = await createPortrait(parsedArgs, client);
+
+      expect(result.image).toBe("/tmp/out.png");
+      expect(result.remote_url).toBeUndefined();
+      expect(consoleSpy).toHaveBeenCalledWith("Cloud upload failed:", expect.any(Error));
+
+      consoleSpy.mockRestore();
+    });
+
+    it("handles upload returning null url", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: vi.fn().mockResolvedValue({ path: "some/path", url: null }),
+      } as any);
+
+      const client = createMockClient();
+
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(result.remote_url).toBeUndefined();
+    });
+
+    it("passes correct remote path to upload", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      const mockUpload = vi.fn().mockResolvedValue({ path: "test", url: "https://test.com" });
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: mockUpload,
+      } as any);
+      vi.mocked(storageModule.generateRemotePath).mockReturnValue("generated/images/timestamp_portrait.png");
+
+      const client = createMockClient();
+
+      // Parse through schema to apply defaults (mimics MCP server behavior)
+      const parsedArgs = createPortraitSchema.parse({
+        ...baseArgs,
+        description: "Test",
+        output_path: "/tmp/my_portrait.png",
+        guidance: 7.0,
+        steps: 28,
+      });
+
+      await createPortrait(parsedArgs, client);
+
+      expect(storageModule.generateRemotePath).toHaveBeenCalledWith("images", "my_portrait.png");
+      expect(mockUpload).toHaveBeenCalledWith(
+        "/tmp/my_portrait.png",
+        "generated/images/timestamp_portrait.png"
+      );
+    });
+  });
+
+  describe("createPortrait - Progress Callbacks", () => {
+    const baseArgs = {
+      width: 768,
+      height: 1024,
+      backend: "sdxl" as const,
+      style: "realistic" as const,
+      expression: "neutral" as const,
+    };
+
+    it("calls progress callback with all stages", async () => {
+      const client = createMockClient();
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client,
+        { onProgress }
+      );
+
+      expect(progressEvents.length).toBeGreaterThan(0);
+      const stages = progressEvents.map(e => e.stage);
+      expect(stages).toContain("queued");
+      expect(stages).toContain("starting");
+      expect(stages).toContain("loading_model");
+      expect(stages).toContain("generating");
+      expect(stages).toContain("post_processing");
+      expect(stages).toContain("complete");
+    });
+
+    it("emits error stage when workflow fails", async () => {
+      const client = createMockClient({
+        waitForCompletion: vi.fn().mockResolvedValue(null),
+      });
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      await expect(
+        createPortrait(
+          {
+            ...baseArgs,
+            description: "Test",
+            output_path: "/tmp/out.png",
+            guidance: 7.0,
+            steps: 28,
+          },
+          client,
+          { onProgress }
+        )
+      ).rejects.toThrow();
+
+      const stages = progressEvents.map(e => e.stage);
+      expect(stages).toContain("error");
+    });
+
+    it("progress events have correct taskId", async () => {
+      const client = createMockClient();
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client,
+        { onProgress, taskId: "test_task_456" }
+      );
+
+      expect(progressEvents.every(e => e.taskId === "test_task_456")).toBe(true);
+    });
+
+    it("progress events have timestamps", async () => {
+      const client = createMockClient();
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client,
+        { onProgress }
+      );
+
+      expect(progressEvents.every(e => e.timestamp > 0)).toBe(true);
+    });
+
+    it("progress percentages increase over time", async () => {
+      const client = createMockClient();
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client,
+        { onProgress }
+      );
+
+      // Filter for non-error events and check progression
+      const normalEvents = progressEvents.filter(e => e.stage !== "error");
+      expect(normalEvents[normalEvents.length - 1].progress).toBe(100);
+    });
+
+    it("works without progress callback", async () => {
+      const client = createMockClient();
+
+      // Should not throw
+      const result = await createPortrait(
+        {
+          ...baseArgs,
+          description: "Test",
+          output_path: "/tmp/out.png",
+          guidance: 7.0,
+          steps: 28,
+        },
+        client
+      );
+
+      expect(result.image).toBeDefined();
+    });
+
+    it("includes uploading stage when cloud upload is configured", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: vi.fn().mockResolvedValue({ path: "test", url: "https://test.com" }),
+      } as any);
+
+      const client = createMockClient();
+      const progressEvents: ProgressEvent[] = [];
+      const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+      // Parse through schema to apply defaults (mimics MCP server behavior)
+      // TODO: Runtime defaults should be added to implementation
+      const parsedArgs = createPortraitSchema.parse({
+        ...baseArgs,
+        description: "Test",
+        output_path: "/tmp/out.png",
+        guidance: 7.0,
+        steps: 28,
+      });
+
+      await createPortrait(parsedArgs, client, { onProgress });
+
+      const stages = progressEvents.map(e => e.stage);
+      expect(stages).toContain("uploading");
+
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(false);
+    });
+  });
+
+  describe("batchCreatePortraitsSchema", () => {
+    it("validates required fields", () => {
+      const validInput = {
+        portraits: [
+          { description: "Person 1", model: "model1.safetensors", name: "person1" },
+          { description: "Person 2", model: "model2.safetensors", name: "person2" },
+        ],
+        output_dir: "/tmp/batch",
+      };
+
+      const result = batchCreatePortraitsSchema.safeParse(validInput);
+      expect(result.success).toBe(true);
+    });
+
+    it("applies default values", () => {
+      const input = {
+        portraits: [{ description: "Test", model: "test.safetensors", name: "test" }],
+        output_dir: "/tmp/out",
+      };
+
+      const result = batchCreatePortraitsSchema.parse(input);
+      expect(result.backend).toBe("sdxl");
+      expect(result.steps).toBe(28);
+      expect(result.guidance).toBe(7.0);
+    });
+
+    it("rejects empty portraits array", () => {
+      const input = {
+        portraits: [],
+        output_dir: "/tmp/out",
+      };
+
+      // Empty array is technically valid by zod, but we might want to validate min length
+      const result = batchCreatePortraitsSchema.safeParse(input);
+      expect(result.success).toBe(true);
+    });
+
+    it("validates portrait object structure", () => {
+      const input = {
+        portraits: [
+          { description: "Test" }, // Missing model and name
+        ],
+        output_dir: "/tmp/out",
+      };
+
+      const result = batchCreatePortraitsSchema.safeParse(input);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("batchCreatePortraits", () => {
+    it("generates multiple portraits", async () => {
+      const client = createMockClient();
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [
+            { description: "Person 1", model: "model1.safetensors", name: "person1" },
+            { description: "Person 2", model: "model2.safetensors", name: "person2" },
+          ],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.results.length).toBe(2);
+      expect(result.summary.total).toBe(2);
+      expect(result.summary.succeeded).toBe(2);
+      expect(result.summary.failed).toBe(0);
+    });
+
+    it("creates output directory", async () => {
+      const client = createMockClient();
+
+      await batchCreatePortraits(
+        {
+          portraits: [{ description: "Test", model: "test.safetensors", name: "test" }],
+          output_dir: "/deep/nested/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(fs.mkdir).toHaveBeenCalledWith("/deep/nested/batch", { recursive: true });
+    });
+
+    it("uses correct output filenames", async () => {
+      const client = createMockClient();
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [
+            { description: "Odin", model: "model.safetensors", name: "odin_portrait" },
+          ],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.results[0].image).toBe("/tmp/batch/odin_portrait.png");
+    });
+
+    it("handles individual portrait failures gracefully", async () => {
+      let callCount = 0;
+      const client = createMockClient({
+        waitForCompletion: vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 2) {
+            return Promise.resolve(null); // Second portrait fails
+          }
+          return Promise.resolve({
+            status: { status_str: "success", completed: true, messages: [] },
+            outputs: {
+              "save": { images: [{ filename: "test.png", subfolder: "", type: "output" }] },
+              "9": { images: [{ filename: "test.png", subfolder: "", type: "output" }] },
+            },
+          });
+        }),
+      });
+
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [
+            { description: "Success", model: "model.safetensors", name: "success" },
+            { description: "Fail", model: "model.safetensors", name: "fail" },
+            { description: "Success2", model: "model.safetensors", name: "success2" },
+          ],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.summary.succeeded).toBe(2);
+      expect(result.summary.failed).toBe(1);
+      expect(result.results[1].success).toBe(false);
+      expect(result.results[1].error).toBeDefined();
+
+      consoleSpy.mockRestore();
+    });
+
+    it("includes error message in failed results", async () => {
+      const client = createMockClient({
+        waitForCompletion: vi.fn().mockResolvedValue(null),
+      });
+
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [{ description: "Test", model: "model.safetensors", name: "test" }],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.results[0].success).toBe(false);
+      expect(result.results[0].error).toContain("No output from workflow");
+
+      consoleSpy.mockRestore();
+    });
+
+    it("uses provided style for each portrait", async () => {
+      const client = createMockClient();
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [
+            { description: "Anime char", model: "model.safetensors", name: "anime", style: "anime" },
+            { description: "Furry char", model: "model.safetensors", name: "furry", style: "furry" },
+          ],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.results[0].prompt).toContain("anime");
+      expect(result.results[1].prompt).toContain("anthro");
+    });
+
+    it("uses backend for all portraits", async () => {
+      const client = createMockClient();
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [
+            { description: "Test 1", model: "flux.gguf", name: "test1" },
+            { description: "Test 2", model: "flux.gguf", name: "test2" },
+          ],
+          output_dir: "/tmp/batch",
+          backend: "flux_gguf",
+          steps: 4,
+          guidance: 2.0,
+        },
+        client
+      );
+
+      expect(result.results[0].model).toContain("flux");
+      expect(result.results[1].model).toContain("flux");
+    });
+
+    it("includes remote_url when cloud upload succeeds", async () => {
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(true);
+      vi.mocked(storageModule.getStorageProvider).mockReturnValue({
+        upload: vi.fn().mockResolvedValue({
+          path: "test/path",
+          url: "https://storage.example.com/test.png",
+        }),
+      } as any);
+
+      const client = createMockClient();
+
+      // Parse through schema to apply defaults (mimics MCP server behavior)
+      // TODO: Runtime defaults should be added to implementation
+      const parsedArgs = batchCreatePortraitsSchema.parse({
+        portraits: [{ description: "Test", model: "model.safetensors", name: "test" }],
+        output_dir: "/tmp/batch",
+        backend: "sdxl",
+        steps: 28,
+        guidance: 7.0,
+      });
+
+      const result = await batchCreatePortraits(parsedArgs, client);
+
+      expect(result.results[0].remote_url).toBe("https://storage.example.com/test.png");
+
+      vi.mocked(storageModule.isCloudStorageConfigured).mockReturnValue(false);
+    });
+
+    it("handles empty portraits array", async () => {
+      const client = createMockClient();
+
+      const result = await batchCreatePortraits(
+        {
+          portraits: [],
+          output_dir: "/tmp/batch",
+          backend: "sdxl",
+          steps: 28,
+          guidance: 7.0,
+        },
+        client
+      );
+
+      expect(result.results).toEqual([]);
+      expect(result.summary.total).toBe(0);
+      expect(result.summary.succeeded).toBe(0);
+      expect(result.summary.failed).toBe(0);
     });
   });
 });

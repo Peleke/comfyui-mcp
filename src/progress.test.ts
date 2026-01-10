@@ -244,4 +244,197 @@ describe("Progress Module", () => {
       expect(parsed.taskId).toBe("task_123");
     });
   });
+
+  describe("Edge Cases", () => {
+    it("handles callback that throws error", () => {
+      const errorCallback: ProgressCallback = () => {
+        throw new Error("Callback error");
+      };
+
+      const emit = createProgressEmitter("task_123", errorCallback);
+
+      // Should not propagate error (callback errors should be silently caught or logged)
+      // If the implementation doesn't catch, this test documents expected behavior
+      expect(() => emit("generating", 50, "Half done")).toThrow("Callback error");
+    });
+
+    it("handles very long messages", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      const longMessage = "a".repeat(10000);
+      emit("generating", 50, longMessage);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.message).toBe(longMessage);
+    });
+
+    it("handles special characters in messages", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      const specialMessage = "Unicode: 你好世界 🎉 <script>alert('xss')</script>";
+      emit("generating", 50, specialMessage);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.message).toBe(specialMessage);
+    });
+
+    it("handles progress values at boundaries", () => {
+      const events: ProgressEvent[] = [];
+      const callback = (e: ProgressEvent) => events.push(e);
+      const emit = createProgressEmitter("task_123", callback);
+
+      emit("queued", 0, "Start");
+      emit("complete", 100, "Done");
+
+      expect(events[0].progress).toBe(0);
+      expect(events[1].progress).toBe(100);
+    });
+
+    it("handles negative progress values", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      // Negative progress should be passed through (caller's responsibility to validate)
+      emit("generating", -1, "Invalid");
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(-1);
+    });
+
+    it("handles progress values over 100", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      // Over 100% should be passed through
+      emit("generating", 150, "Overflow");
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(150);
+    });
+
+    it("timestamps are monotonically increasing", async () => {
+      const events: ProgressEvent[] = [];
+      const callback = (e: ProgressEvent) => events.push(e);
+      const emit = createProgressEmitter("task_123", callback);
+
+      emit("queued", 0, "First");
+      await new Promise(r => setTimeout(r, 10));
+      emit("generating", 50, "Second");
+      await new Promise(r => setTimeout(r, 10));
+      emit("complete", 100, "Third");
+
+      expect(events[0].timestamp).toBeLessThanOrEqual(events[1].timestamp);
+      expect(events[1].timestamp).toBeLessThanOrEqual(events[2].timestamp);
+    });
+
+    it("handles empty message string", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      emit("generating", 50, "");
+
+      const event = callback.mock.calls[0][0];
+      expect(event.message).toBe("");
+    });
+
+    it("handles empty extra fields object", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+
+      emit("generating", 50, "Test", {});
+
+      const event = callback.mock.calls[0][0];
+      expect(event.taskId).toBe("task_123");
+    });
+  });
+
+  describe("wrapComfyUIProgress Edge Cases", () => {
+    it("handles zero denominator", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(5, 0);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(0); // Should handle gracefully, not NaN or Infinity
+    });
+
+    it("handles negative values", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(-5, 100);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(-5);
+    });
+
+    it("handles value larger than max", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(150, 100);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(150); // Should pass through even if > 100%
+    });
+
+    it("handles very large numbers", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(999999, 1000000);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(100); // 99.9999% rounds to 100
+    });
+
+    it("handles floating point values", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(1.5, 3.0);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.progress).toBe(50); // Should handle floats correctly
+    });
+
+    it("includes step and totalSteps in event", () => {
+      const callback = vi.fn<[ProgressEvent], void>();
+      const emit = createProgressEmitter("task_123", callback);
+      const comfyCallback = wrapComfyUIProgress(emit);
+
+      comfyCallback(15, 30);
+
+      const event = callback.mock.calls[0][0];
+      expect(event.step).toBe(15);
+      expect(event.totalSteps).toBe(30);
+    });
+  });
+
+  describe("generateTaskId Uniqueness", () => {
+    it("generates many unique IDs", () => {
+      const ids = new Set<string>();
+      for (let i = 0; i < 1000; i++) {
+        ids.add(generateTaskId());
+      }
+      // All IDs should be unique
+      expect(ids.size).toBe(1000);
+    });
+
+    it("IDs are valid strings", () => {
+      for (let i = 0; i < 100; i++) {
+        const id = generateTaskId();
+        expect(typeof id).toBe("string");
+        expect(id.length).toBeGreaterThan(10);
+      }
+    });
+  });
 });

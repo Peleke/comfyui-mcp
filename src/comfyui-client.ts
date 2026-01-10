@@ -3,7 +3,12 @@ import WebSocket from "ws";
 export interface ComfyUIConfig {
   url: string;
   outputDir?: string;
+  /** Generation timeout in milliseconds (default: 10 minutes) */
+  timeout?: number;
 }
+
+/** Default timeout: 10 minutes. Override with COMFYUI_TIMEOUT env var (in seconds) */
+const DEFAULT_TIMEOUT = parseInt(process.env.COMFYUI_TIMEOUT || "600", 10) * 1000;
 
 export interface QueuePromptResponse {
   prompt_id: string;
@@ -49,11 +54,13 @@ export class ComfyUIClient {
   private baseUrl: string;
   private wsUrl: string;
   public outputDir: string;
+  private timeout: number;
 
   constructor(config: ComfyUIConfig) {
     this.baseUrl = config.url.replace(/\/$/, "");
     this.wsUrl = this.baseUrl.replace(/^http/, "ws");
     this.outputDir = config.outputDir || "/tmp/comfyui-output";
+    this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
   }
 
   async queuePrompt(workflow: any, clientId?: string): Promise<QueuePromptResponse> {
@@ -193,13 +200,14 @@ export class ComfyUIClient {
         }
       });
 
-      // Timeout after 5 minutes
+      // Timeout (default 10 minutes, configurable via COMFYUI_TIMEOUT env var)
+      const timeoutMinutes = Math.round(this.timeout / 60000);
       setTimeout(() => {
         if (!resolved) {
           cleanup();
-          reject(new Error("Generation timed out after 5 minutes"));
+          reject(new Error(`Generation timed out after ${timeoutMinutes} minutes`));
         }
-      }, 5 * 60 * 1000);
+      }, this.timeout);
     });
   }
 

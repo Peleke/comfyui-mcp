@@ -460,6 +460,7 @@ export async function batchCreatePortraits(
           width: 768,
           height: 1024,
           output_path: outputPath,
+          upload_to_cloud: true, // Always upload batch portraits to cloud
         },
         client
       );
