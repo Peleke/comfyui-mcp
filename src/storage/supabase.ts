@@ -68,14 +68,20 @@ export class SupabaseStorageProvider implements StorageProvider {
       throw new Error(`Supabase upload failed: ${error.message}`);
     }
 
-    // Get public URL (if bucket is public) or generate signed URL
+    // Get public URL (may not work if bucket is private)
     const { data: urlData } = this.client.storage
       .from(this.bucket)
       .getPublicUrl(remotePath);
 
+    // Generate signed URL for private bucket access (1 hour default)
+    const { data: signedData } = await this.client.storage
+      .from(this.bucket)
+      .createSignedUrl(remotePath, 3600);
+
     return {
       path: data.path,
       url: urlData.publicUrl,
+      signedUrl: signedData?.signedUrl,
       size: fileBuffer.length,
     };
   }

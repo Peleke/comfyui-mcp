@@ -31,8 +31,41 @@ export interface UploadResult {
   path: string;
   /** Public URL if available, null for local storage */
   url: string | null;
+  /** Signed URL for private buckets (time-limited access) */
+  signedUrl?: string;
   /** Size in bytes */
   size: number;
+}
+
+/** Options for viewing/downloading results */
+export interface ViewOptions {
+  /** Auto-open in browser after generation (default: false on headless, true on desktop) */
+  autoOpen?: boolean;
+  /** Download to local path (default: true on desktop, false on headless) */
+  download?: boolean;
+  /** Local download path (default: ./output/) */
+  downloadPath?: string;
+}
+
+/** Detect if running in headless environment */
+export function isHeadless(): boolean {
+  return (
+    !process.env.DISPLAY && // No X11 display
+    !process.env.TERM_PROGRAM && // No terminal program (VS Code, iTerm, etc.)
+    (process.env.SSH_CONNECTION !== undefined || // SSH session
+      process.env.FLY_APP_NAME !== undefined || // Fly.io
+      process.env.KUBERNETES_SERVICE_HOST !== undefined) // K8s
+  );
+}
+
+/** Get default view options based on environment */
+export function getDefaultViewOptions(): ViewOptions {
+  const headless = isHeadless();
+  return {
+    autoOpen: !headless,
+    download: !headless,
+    downloadPath: process.env.OUTPUT_PATH || "./output",
+  };
 }
 
 export interface HealthCheckResult {
