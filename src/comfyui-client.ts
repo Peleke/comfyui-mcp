@@ -21,6 +21,30 @@ export interface QueueStatus {
   queue_pending: any[];
 }
 
+// Minimal fetch options to avoid aiohttp's 8KB header limit
+// Node.js fetch can sometimes include large default headers or proxy headers
+const FETCH_OPTIONS: RequestInit = {
+  credentials: "omit",  // Don't send cookies
+  cache: "no-store",    // Don't cache
+};
+
+const GET_OPTIONS: RequestInit = {
+  ...FETCH_OPTIONS,
+  method: "GET",
+  headers: {
+    "Accept": "application/json",
+  },
+};
+
+const POST_OPTIONS: RequestInit = {
+  ...FETCH_OPTIONS,
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  },
+};
+
 export class ComfyUIClient {
   private baseUrl: string;
   private wsUrl: string;
@@ -39,8 +63,7 @@ export class ComfyUIClient {
     }
 
     const response = await fetch(`${this.baseUrl}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      ...POST_OPTIONS,
       body: JSON.stringify(body),
     });
 
@@ -53,7 +76,7 @@ export class ComfyUIClient {
   }
 
   async getHistory(promptId: string): Promise<HistoryItem | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`);
+    const response = await fetch(`${this.baseUrl}/history/${promptId}`, GET_OPTIONS);
     if (!response.ok) {
       throw new Error(`Failed to get history: ${response.status}`);
     }
@@ -63,7 +86,7 @@ export class ComfyUIClient {
   }
 
   async getObjectInfo(): Promise<Record<string, any>> {
-    const response = await fetch(`${this.baseUrl}/object_info`);
+    const response = await fetch(`${this.baseUrl}/object_info`, GET_OPTIONS);
     if (!response.ok) {
       throw new Error(`Failed to get object info: ${response.status}`);
     }
@@ -71,7 +94,7 @@ export class ComfyUIClient {
   }
 
   async getQueueStatus(): Promise<QueueStatus> {
-    const response = await fetch(`${this.baseUrl}/queue`);
+    const response = await fetch(`${this.baseUrl}/queue`, GET_OPTIONS);
     if (!response.ok) {
       throw new Error(`Failed to get queue: ${response.status}`);
     }
@@ -193,9 +216,36 @@ export class ComfyUIClient {
 
   async getImage(filename: string, subfolder: string, type: string): Promise<Buffer> {
     const params = new URLSearchParams({ filename, subfolder, type });
-    const response = await fetch(`${this.baseUrl}/view?${params}`);
+    const response = await fetch(`${this.baseUrl}/view?${params}`, {
+      ...FETCH_OPTIONS,
+      method: "GET",
+    });
     if (!response.ok) {
       throw new Error(`Failed to get image: ${response.status}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async getAudio(filename: string, subfolder: string, type: string): Promise<Buffer> {
+    const params = new URLSearchParams({ filename, subfolder, type });
+    const response = await fetch(`${this.baseUrl}/view?${params}`, {
+      ...FETCH_OPTIONS,
+      method: "GET",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to get audio: ${response.status}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async getVideo(filename: string, subfolder: string, type: string): Promise<Buffer> {
+    const params = new URLSearchParams({ filename, subfolder, type });
+    const response = await fetch(`${this.baseUrl}/view?${params}`, {
+      ...FETCH_OPTIONS,
+      method: "GET",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to get video: ${response.status}`);
     }
     return Buffer.from(await response.arrayBuffer());
   }
