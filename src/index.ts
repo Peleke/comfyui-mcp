@@ -48,6 +48,14 @@ import {
   listLipSyncModels,
   listLipSyncModelsSchema,
 } from "./tools/lipsync.js";
+import {
+  listAvatars,
+  listAvatarsSchema,
+  listVoicesCatalog,
+  listVoicesCatalogSchema,
+  createPortrait,
+  createPortraitSchema,
+} from "./tools/avatar.js";
 
 // Configuration from environment
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
@@ -1105,6 +1113,81 @@ const TOOLS = [
       properties: {},
     },
   },
+  // ============================================================================
+  // Avatar Management Tools
+  // ============================================================================
+  {
+    name: "list_avatars",
+    description:
+      "List available avatar/portrait images in ComfyUI input folder. Convention: place portraits in input/avatars/ subfolder.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "list_voices_catalog",
+    description:
+      "List available voice reference files with metadata. Convention: place voice samples in input/voices/ subfolder.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "create_portrait",
+    description:
+      "Generate a portrait image optimized for lip-sync using Flux. Creates front-facing, well-lit portraits suitable for the talk() pipeline.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        description: {
+          type: "string",
+          description: "Description of the person/character to generate",
+        },
+        style: {
+          type: "string",
+          enum: ["realistic", "artistic", "anime"],
+          description: "Visual style (default: realistic)",
+        },
+        gender: {
+          type: "string",
+          enum: ["male", "female", "androgynous"],
+          description: "Gender presentation (helps with prompting)",
+        },
+        age: {
+          type: "string",
+          description: "Approximate age (e.g., '30s', 'elderly', 'young')",
+        },
+        expression: {
+          type: "string",
+          enum: ["neutral", "slight_smile", "serious", "friendly"],
+          description: "Facial expression (default: neutral)",
+        },
+        model: {
+          type: "string",
+          description: "Flux GGUF model to use (default: flux1-schnell-Q8_0.gguf)",
+        },
+        guidance: {
+          type: "number",
+          description: "Flux guidance scale (default: 2.0, use 1-4 for realism)",
+        },
+        steps: {
+          type: "number",
+          description: "Sampling steps (default: 4 for schnell, use 20+ for dev)",
+        },
+        seed: {
+          type: "number",
+          description: "Random seed for reproducibility",
+        },
+        output_path: {
+          type: "string",
+          description: "Full path to save the portrait image",
+        },
+      },
+      required: ["description", "output_path"],
+    },
+  },
 ];
 
 // Create server
@@ -1564,6 +1647,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_lipsync_models": {
         const validatedArgs = listLipSyncModelsSchema.parse(args);
         const result = await listLipSyncModels(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // ====== Avatar Management Tools ======
+      case "list_avatars": {
+        const validatedArgs = listAvatarsSchema.parse(args);
+        const result = await listAvatars(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "list_voices_catalog": {
+        const validatedArgs = listVoicesCatalogSchema.parse(args);
+        const result = await listVoicesCatalog(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "create_portrait": {
+        const validatedArgs = createPortraitSchema.parse(args);
+        const result = await createPortrait(validatedArgs, client);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
