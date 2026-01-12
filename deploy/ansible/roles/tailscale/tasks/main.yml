@@ -1,0 +1,119 @@
+---
+# Tailscale setup for RunPod private networking
+# Allows Fly.io HTTP service to connect to ComfyUI via private mesh
+#
+# Supports both:
+# - Systemd-based systems (VMs)
+# - Containers (RunPod) - uses userspace networking mode
+
+- name: Check if Tailscale is installed
+  command: which tailscale
+  register: tailscale_check
+  ignore_errors: true
+  changed_when: false
+
+- name: Install Tailscale
+  when: tailscale_check.rc != 0
+  block:
+    - name: Download Tailscale installer
+      get_url:
+        url: https://tailscale.com/install.sh
+        dest: /tmp/tailscale-install.sh
+        mode: '0755'
+
+    - name: Run Tailscale installer
+      command: /tmp/tailscale-install.sh
+      args:
+        creates: /usr/bin/tailscale
+
+- name: Check if systemd is available
+  stat:
+    path: /run/systemd/system
+  register: systemd_check
+
+- name: Start tailscaled (systemd)
+  when: systemd_check.stat.exists
+  systemd:
+    name: tailscaled
+    state: started
+    enabled: yes
+
+- name: Start tailscaled (container/userspace mode)
+  when: not systemd_check.stat.exists
+  block:
+    - name: Create Tailscale state directory
+      file:
+        path: /var/lib/tailscale
+        state: directory
+        mode: '0755'
+
+    - name: Check if tailscaled is already running
+      shell: pgrep tailscaled || true
+      register: tailscaled_pid
+      changed_when: false
+
+    - name: Start tailscaled in userspace networking mode
+      shell: |
+        nohup tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state > /var/log/tailscaled.log 2>&1 &
+        sleep 3
+      when: tailscaled_pid.stdout == ""
+
+- name: Check Tailscale status
+  command: tailscale status
+  register: ts_status
+  ignore_errors: true
+  changed_when: false
+  retries: 3
+  delay: 2
+  until: ts_status.rc == 0 or "'Logged out' in ts_status.stdout"
+
+- name: Connect to Tailscale network
+  when: "ts_status.rc != 0 or 'Logged out' in ts_status.stdout or 'not logged in' in ts_status.stderr"
+  command: "tailscale up --authkey={{ tailscale_authkey }} --hostname={{ tailscale_hostname }}{{ ' --accept-routes' if tailscale_accept_routes else '' }}"
+  no_log: true  # Don't log the authkey
+
+- name: Verify Tailscale connection
+  command: tailscale status
+  register: ts_final_status
+  changed_when: false
+
+- name: Display Tailscale status
+  debug:
+    msg: "{{ ts_final_status.stdout_lines }}"
+
+- name: Get Tailscale IP
+  command: tailscale ip -4
+  register: ts_ip
+  changed_when: false
+
+- name: Display Tailscale IP
+  debug:
+    msg: "RunPod Tailscale IP: {{ ts_ip.stdout }} (use http://{{ tailscale_hostname }}:8188 from Fly)"
+
+- name: Create tailscaled startup script (container persistence)
+  when: not systemd_check.stat.exists
+  copy:
+    dest: /usr/local/bin/start-tailscale.sh
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Start tailscaled for container environments
+      # Add to your container startup script or run manually after restart
+
+      if ! pgrep tailscaled > /dev/null; then
+        echo "Starting tailscaled..."
+        tailscaled --tun=userspace-networking --state=/var/lib/tailscale/tailscaled.state &
+        sleep 2
+        tailscale up --hostname={{ tailscale_hostname }}
+      else
+        echo "tailscaled already running"
+      fi
+      tailscale status
+
+- name: Note about container restarts
+  when: not systemd_check.stat.exists
+  debug:
+    msg: |
+      NOTE: This is a container - tailscaled won't auto-start on restart.
+      After pod restart, run: /usr/local/bin/start-tailscale.sh
+      Or add it to your container startup script.

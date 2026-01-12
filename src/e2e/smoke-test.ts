@@ -126,6 +126,7 @@ async function main() {
           width: 512,
           height: 512,
           output_path: outputPath,
+          upload_to_cloud: false, // Skip cloud upload in smoke test
         },
         models[0]
       );

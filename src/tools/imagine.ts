@@ -1,9 +1,15 @@
 import { z } from "zod";
+import { basename } from "path";
 import { ComfyUIClient } from "../comfyui-client.js";
 import { PromptGenerator } from "../prompting/generator.js";
 import { detectModelFamily } from "../prompting/model-detection.js";
 import { executePipeline, ExecutePipelineInput } from "./pipeline.js";
 import type { StylePreset, ModelFamily } from "../prompting/types.js";
+import {
+  getStorageProvider,
+  isCloudStorageConfigured,
+  generateRemotePath,
+} from "../storage/index.js";
 
 // Schema for LoRA configuration
 const loraSchema = z.object({
@@ -143,6 +149,13 @@ export const imagineSchema = z.object({
     .describe(
       "Quality preset: draft (fast), standard (balanced), high (better details), ultra (hi-res + upscale)"
     ),
+
+  // Cloud storage upload
+  upload_to_cloud: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Upload result to cloud storage and return signed URL"),
 });
 
 export type ImagineInput = z.infer<typeof imagineSchema>;
@@ -150,6 +163,7 @@ export type ImagineInput = z.infer<typeof imagineSchema>;
 interface ImagineResult {
   success: boolean;
   imagePath: string;
+  remote_url?: string;
   seed: number;
   prompt: {
     positive: string;
@@ -384,9 +398,27 @@ export async function imagine(
   // Build result
   const pipelineSteps = pipelineResult.steps.map((s) => s.name);
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  const upload_to_cloud = input.upload_to_cloud ?? true;
+  if (pipelineResult.success && upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("images", basename(pipelineResult.finalPath));
+      console.error(`Imagine: Uploading to cloud storage: ${remotePath}`);
+      const uploadResult = await storage.upload(pipelineResult.finalPath, remotePath);
+      remote_url = uploadResult.signedUrl || uploadResult.url || undefined;
+      console.error(`Imagine: Cloud upload succeeded: ${remote_url}`);
+    } catch (uploadErr) {
+      console.error(`Imagine: Cloud upload failed:`, uploadErr);
+      // Continue without remote URL - local file still available
+    }
+  }
+
   return {
     success: pipelineResult.success,
     imagePath: pipelineResult.finalPath,
+    remote_url,
     seed: pipelineResult.seed,
     prompt: {
       positive: generatedPrompt.positive,
@@ -398,6 +430,7 @@ export async function imagine(
     message: pipelineResult.success
       ? `✨ Image generated successfully!\n\n` +
         `📁 Saved to: ${pipelineResult.finalPath}\n` +
+        (remote_url ? `🌐 Cloud URL: ${remote_url}\n` : "") +
         `🎲 Seed: ${pipelineResult.seed}\n` +
         `🔧 Pipeline: ${pipelineSteps.join(" → ")}\n` +
         `📐 Size: ${finalSettings.width}x${finalSettings.height}\n` +

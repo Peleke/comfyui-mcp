@@ -2,7 +2,12 @@ import { z } from "zod";
 import { ComfyUIClient } from "../comfyui-client.js";
 import { buildTxt2ImgWorkflow, buildImg2ImgWorkflow, LoraConfig } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { dirname, basename } from "path";
+import {
+  getStorageProvider,
+  isCloudStorageConfigured,
+  generateRemotePath,
+} from "../storage/index.js";
 
 // Shared LoRA schema
 const loraSchema = z.object({
@@ -24,6 +29,7 @@ export const generateImageSchema = z.object({
   seed: z.number().optional().describe("Random seed (random if not specified)"),
   loras: z.array(loraSchema).optional().describe("Array of LoRAs to apply"),
   output_path: z.string().describe("Full path where the generated image should be saved"),
+  upload_to_cloud: z.boolean().optional().default(true).describe("Upload result to cloud storage"),
 });
 
 export const img2imgSchema = z.object({
@@ -77,7 +83,7 @@ export async function generateImage(
   client: ComfyUIClient,
   input: GenerateImageInput,
   defaultModel: string
-): Promise<{ success: boolean; path: string; seed: number; message: string }> {
+): Promise<{ success: boolean; path: string; remote_url?: string; seed: number; message: string }> {
   const model = input.model || defaultModel;
 
   if (!model) {
@@ -112,11 +118,28 @@ export async function generateImage(
 
   await extractAndSaveImage(client, history, "9", input.output_path);
 
+  // Upload to cloud storage if configured and requested
+  let remote_url: string | undefined;
+  const upload_to_cloud = input.upload_to_cloud ?? true;
+  if (upload_to_cloud && isCloudStorageConfigured()) {
+    try {
+      const storage = getStorageProvider();
+      const remotePath = generateRemotePath("images", basename(input.output_path));
+      const uploadResult = await storage.upload(input.output_path, remotePath);
+      remote_url = uploadResult.signedUrl || uploadResult.url || undefined;
+    } catch (uploadErr) {
+      console.error("Cloud upload failed:", uploadErr);
+    }
+  }
+
   return {
     success: true,
     path: input.output_path,
+    remote_url,
     seed: seed,
-    message: `Image generated and saved to ${input.output_path}`,
+    message: remote_url
+      ? `Image generated and uploaded to cloud: ${remote_url}`
+      : `Image generated and saved to ${input.output_path}`,
   };
 }
 

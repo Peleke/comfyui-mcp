@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "comfyui-mcp": "./dist/index.js"
+    "comfyui-mcp": "./dist/index.js",
+    "comfyui-mcp-serve": "./dist/http-server.js"
   },
   "repository": {
     "type": "git",
@@ -23,12 +24,20 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "RUN_E2E=true vitest run src/tools/e2e.test.ts --reporter=verbose",
     "e2e:smoke": "tsx src/e2e/smoke-test.ts",
-    "e2e:gpu": "tsx src/e2e/gpu-pipeline.ts"
+    "e2e:gpu": "tsx src/e2e/gpu-pipeline.ts",
+    "serve": "node dist/http-server.js",
+    "serve:dev": "tsx src/http-server.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.14.0",
+    "@hono/node-server": "^1.19.8",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@supabase/storage-js": "^2.90.1",
     "@supabase/supabase-js": "^2.45.0",
+    "@upstash/ratelimit": "^2.0.7",
+    "@upstash/redis": "^1.36.1",
+    "hono": "^4.11.3",
+    "quirrel": "^1.14.1",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },

@@ -98,6 +98,11 @@ Generate an image from a text prompt (txt2img).
 | seed | number | random | Random seed for reproducibility |
 | loras | array | none | LoRAs to apply (see below) |
 | output_path | string | required | Where to save the image |
+| upload_to_cloud | bool | true | Upload to cloud storage and return signed URL |
+
+**Returns:** `{ success, path, remote_url?, seed, message }`
+
+When `upload_to_cloud` is true and cloud storage is configured, `remote_url` contains a signed URL valid for 1 hour.
 
 **LoRA format:**
 ```json
@@ -158,6 +163,9 @@ Upscale an image using AI upscaling models.
 | quality | string | "standard" | "draft", "standard", "high", "ultra" |
 | loras | array | none | LoRAs to apply |
 | seed | number | random | For reproducibility |
+| upload_to_cloud | bool | true | Upload to cloud and return signed URL |
+
+**Returns:** `{ success, imagePath, remote_url?, seed, prompt, modelFamily, pipelineSteps, settings, message }`
 
 **Quality presets:**
 - `draft`: Fast generation, txt2img only
@@ -291,11 +299,29 @@ Our server dynamically constructs these graphs based on your parameters. When yo
 
 ## Environment Variables
 
+### Core
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | COMFYUI_URL | http://localhost:8188 | ComfyUI API endpoint |
 | COMFYUI_MODEL | (none) | Default checkpoint model |
 | COMFYUI_OUTPUT_DIR | /tmp/comfyui-output | Fallback output directory |
+
+### Cloud Storage (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| STORAGE_PROVIDER | (none) | Set to "supabase" to enable cloud uploads |
+| SUPABASE_URL | (none) | Your Supabase project URL |
+| SUPABASE_SECRET_KEY | (none) | Supabase service role key (sb_secret_...) |
+| SUPABASE_BUCKET | generated-assets | Storage bucket name |
+
+### HTTP Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| PORT | 3001 | HTTP server port |
+| NODE_ENV | development | Set to "production" for Fly.io |
 
 ## Project Structure
 
@@ -396,11 +422,53 @@ The codebase is designed for extension:
 - **Video**: ComfyUI supports AnimateDiff—same workflow pattern applies
 - **Custom nodes**: Any ComfyUI custom node can be integrated into workflow templates
 
-## Cloud Deployment (RunPod)
+## Cloud Deployment
+
+### Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph Client["Client Layer"]
+        CC[Claude Code<br/>MCP Client]
+        WEB[Web App<br/>landline-landing]
+    end
+
+    subgraph Service["Service Layer (Fly.io)"]
+        MCP[comfyui-mcp<br/>MCP Server]
+        HTTP[HTTP Server<br/>REST API]
+    end
+
+    subgraph GPU["GPU Layer (RunPod)"]
+        COMFY[ComfyUI<br/>RTX 4090]
+    end
+
+    subgraph Storage["Storage Layer (Supabase)"]
+        BUCKET[Storage Bucket<br/>generated-assets]
+        SIGNED[Signed URLs<br/>1hr expiry]
+    end
+
+    CC -->|MCP Protocol| MCP
+    WEB -->|HTTPS REST| HTTP
+    MCP -->|Proxy URL| COMFY
+    HTTP -->|Proxy URL| COMFY
+    MCP -->|Upload| BUCKET
+    HTTP -->|Upload| BUCKET
+    BUCKET -->|Generate| SIGNED
+    SIGNED -->|View in Browser| WEB
+    SIGNED -->|View in Browser| CC
+```
+
+### How It Works
+
+1. **Client Request**: Claude Code (via MCP) or web apps (via HTTP) send generation requests
+2. **Service Processing**: The service builds ComfyUI workflows and queues them
+3. **GPU Execution**: RunPod executes the workflow on a rented GPU (RTX 4090)
+4. **Cloud Storage**: Results are uploaded to Supabase Storage
+5. **Signed URLs**: A 1-hour signed URL is returned for secure browser viewing
+
+### RunPod Setup
 
 Don't have a local GPU? Run ComfyUI on RunPod and connect remotely.
-
-### Quick Start
 
 1. Create a RunPod pod with PyTorch template
 2. SSH in and run:
@@ -414,6 +482,83 @@ curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/deploy/quick-deploy.
 ```
 
 See [deploy/README.md](./deploy/README.md) for detailed instructions.
+
+### Cloud Storage (Supabase)
+
+Generated images can be automatically uploaded to Supabase Storage with signed URLs for secure sharing.
+
+**Setup:**
+1. Create a Supabase project
+2. Create a storage bucket named `generated-assets`
+3. Add the RLS policy: `true` (or `auth.role() = 'service_role'` for restricted access)
+4. Set environment variables (see below)
+
+**Usage:**
+- MCP tools (`imagine`, `generate_image`) include `upload_to_cloud: true` by default
+- Results include a `remote_url` field with a 1-hour signed URL
+- URLs can be opened directly in browsers for viewing
+
+### HTTP Server (Web Integration)
+
+For web apps that can't use MCP directly, an HTTP server is available:
+
+```bash
+# Start the HTTP server
+npm run serve
+# or
+node dist/http-server.js
+```
+
+**Endpoints:**
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with GPU info |
+| `/imagine` | POST | Natural language image generation |
+| `/image` | POST | Direct txt2img generation |
+| `/portrait` | POST | AI portrait generation |
+| `/tts` | POST | Text-to-speech with F5-TTS |
+| `/lipsync` | POST | Video lip-sync with MuseTalk |
+
+**Example:**
+```bash
+curl -X POST https://your-service.fly.dev/imagine \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "A cyberpunk cityscape at sunset",
+    "output_path": "/tmp/cyberpunk.png"
+  }'
+
+# Response:
+{
+  "success": true,
+  "imagePath": "/tmp/cyberpunk.png",
+  "signedUrl": "https://xxx.supabase.co/storage/v1/object/sign/...",
+  "seed": 1234567890,
+  "message": "✨ Image generated successfully!"
+}
+```
+
+### Fly.io Deployment
+
+Deploy the HTTP server to Fly.io for production web integration:
+
+```bash
+# Install flyctl
+curl -L https://fly.io/install.sh | sh
+
+# Deploy
+fly launch
+fly secrets set \
+  COMFYUI_URL="https://<POD_ID>-8188.proxy.runpod.net" \
+  COMFYUI_MODEL="novaFurryXL.safetensors" \
+  SUPABASE_URL="https://xxx.supabase.co" \
+  SUPABASE_SECRET_KEY="sb_secret_xxx" \
+  SUPABASE_BUCKET="generated-assets" \
+  STORAGE_PROVIDER="supabase"
+
+fly deploy
+```
 
 ## Related
 

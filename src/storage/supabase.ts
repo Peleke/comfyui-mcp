@@ -10,7 +10,7 @@
  * - Signed URLs provide temporary access
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { StorageClient } from "@supabase/storage-js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import {
@@ -23,7 +23,7 @@ import {
 export interface SupabaseStorageConfig {
   /** Supabase project URL */
   url: string;
-  /** Service role key (NOT anon key) */
+  /** Service role key (NOT anon key) - can be new sb_secret_ format or JWT */
   serviceKey: string;
   /** Storage bucket name */
   bucket: string;
@@ -31,7 +31,7 @@ export interface SupabaseStorageConfig {
 
 export class SupabaseStorageProvider implements StorageProvider {
   readonly name = "supabase";
-  private client: SupabaseClient;
+  private storage: StorageClient;
   private bucket: string;
 
   constructor(config: SupabaseStorageConfig) {
@@ -42,11 +42,15 @@ export class SupabaseStorageProvider implements StorageProvider {
       throw new Error("Supabase service key is required");
     }
 
-    this.client = createClient(config.url, config.serviceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
+    // Use StorageClient directly with explicit auth headers
+    // This works with both old JWT format and new sb_secret_ format
+    const storageUrl = `${config.url}/storage/v1`;
+    console.log(`[Supabase] Initializing StorageClient with URL: ${storageUrl}`);
+    console.log(`[Supabase] Using bucket: ${config.bucket}`);
+    console.log(`[Supabase] Key prefix: ${config.serviceKey.substring(0, 20)}...`);
+    this.storage = new StorageClient(storageUrl, {
+      apikey: config.serviceKey,
+      Authorization: `Bearer ${config.serviceKey}`,
     });
     this.bucket = config.bucket;
   }
@@ -56,25 +60,82 @@ export class SupabaseStorageProvider implements StorageProvider {
     const fileBuffer = await fs.readFile(localPath);
     const contentType = this.guessContentType(localPath);
 
-    // Upload to Supabase
-    const { data, error } = await this.client.storage
+    console.log(`[Supabase] Uploading to bucket: ${this.bucket}, path: ${remotePath}`);
+    console.log(`[Supabase] File size: ${fileBuffer.length} bytes, content-type: ${contentType}`);
+
+    // Try raw fetch first to see actual API response
+    const rawUrl = `${(this.storage as any).url}/object/${this.bucket}/${remotePath}`;
+    console.log(`[Supabase] Raw upload URL: ${rawUrl}`);
+
+    try {
+      const rawResponse = await fetch(rawUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${(this.storage as any).headers.Authorization.split(' ')[1]}`,
+          'apikey': (this.storage as any).headers.apikey,
+          'Content-Type': contentType,
+          'x-upsert': 'true',
+        },
+        body: fileBuffer,
+      });
+      const rawText = await rawResponse.text();
+      console.log(`[Supabase] Raw response status: ${rawResponse.status}`);
+      console.log(`[Supabase] Raw response body: ${rawText.substring(0, 500)}`);
+
+      if (rawResponse.ok) {
+        const jsonData = JSON.parse(rawText);
+        // Get public URL
+        const publicUrl = `${(this.storage as any).url}/object/public/${this.bucket}/${remotePath}`;
+        // Get signed URL
+        const { data: signedData } = await this.storage
+          .from(this.bucket)
+          .createSignedUrl(remotePath, 3600);
+
+        return {
+          path: jsonData.Key || remotePath,
+          url: publicUrl,
+          signedUrl: signedData?.signedUrl,
+          size: fileBuffer.length,
+        };
+      }
+    } catch (rawErr) {
+      console.log(`[Supabase] Raw fetch error:`, rawErr);
+    }
+
+    // Fallback to SDK
+    const { data, error } = await this.storage
       .from(this.bucket)
       .upload(remotePath, fileBuffer, {
         contentType,
         upsert: true, // Overwrite if exists
       });
 
+    console.log(`[Supabase] Upload response - data:`, data, `error:`, error);
+
     if (error) {
-      throw new Error(`Supabase upload failed: ${error.message}`);
+      // Include full error details for debugging
+      // Supabase error object may have: message, error, statusCode, status
+      const errMsg = error.message || (error as any).error || 'Unknown error';
+      const errCode = (error as any).statusCode || (error as any).status || '';
+      const fullError = `${errMsg}${errCode ? ` (status: ${errCode})` : ''}`;
+      console.error('Supabase upload error details:', {
+        message: error.message,
+        error: (error as any).error,
+        statusCode: (error as any).statusCode,
+        status: (error as any).status,
+        cause: (error as any).cause,
+        raw: JSON.stringify(error),
+      });
+      throw new Error(`Supabase upload failed: ${fullError}`);
     }
 
     // Get public URL (may not work if bucket is private)
-    const { data: urlData } = this.client.storage
+    const { data: urlData } = this.storage
       .from(this.bucket)
       .getPublicUrl(remotePath);
 
     // Generate signed URL for private bucket access (1 hour default)
-    const { data: signedData } = await this.client.storage
+    const { data: signedData } = await this.storage
       .from(this.bucket)
       .createSignedUrl(remotePath, 3600);
 
@@ -87,7 +148,7 @@ export class SupabaseStorageProvider implements StorageProvider {
   }
 
   async download(remotePath: string, localPath: string): Promise<void> {
-    const { data, error } = await this.client.storage
+    const { data, error } = await this.storage
       .from(this.bucket)
       .download(remotePath);
 
@@ -104,7 +165,7 @@ export class SupabaseStorageProvider implements StorageProvider {
   }
 
   async list(prefix: string): Promise<StorageObject[]> {
-    const { data, error } = await this.client.storage
+    const { data, error } = await this.storage
       .from(this.bucket)
       .list(prefix, {
         limit: 1000,
@@ -128,7 +189,7 @@ export class SupabaseStorageProvider implements StorageProvider {
   }
 
   async getSignedUrl(remotePath: string, expiresInSeconds = 3600): Promise<string> {
-    const { data, error } = await this.client.storage
+    const { data, error } = await this.storage
       .from(this.bucket)
       .createSignedUrl(remotePath, expiresInSeconds);
 
@@ -142,7 +203,7 @@ export class SupabaseStorageProvider implements StorageProvider {
   async healthCheck(): Promise<HealthCheckResult> {
     try {
       // Try to list the bucket (empty prefix)
-      const { error } = await this.client.storage
+      const { error } = await this.storage
         .from(this.bucket)
         .list("", { limit: 1 });
 
@@ -168,7 +229,7 @@ export class SupabaseStorageProvider implements StorageProvider {
   }
 
   async delete(remotePath: string): Promise<void> {
-    const { error } = await this.client.storage
+    const { error } = await this.storage
       .from(this.bucket)
       .remove([remotePath]);
 
@@ -179,7 +240,7 @@ export class SupabaseStorageProvider implements StorageProvider {
 
   async exists(remotePath: string): Promise<boolean> {
     // Try to get metadata - if it fails, file doesn't exist
-    const { data, error } = await this.client.storage
+    const { data, error } = await this.storage
       .from(this.bucket)
       .list(path.dirname(remotePath), {
         limit: 1,

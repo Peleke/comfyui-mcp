@@ -60,7 +60,13 @@
       cd {{ comfyui_dir }}
       python main.py --listen 0.0.0.0 --port 8188 --enable-cors-header "$@"
 
+- name: Check if systemd is available
+  stat:
+    path: /run/systemd/system
+  register: systemd_check
+
 - name: Create systemd service
+  when: systemd_check.stat.exists
   copy:
     dest: /etc/systemd/system/comfyui.service
     content: |
@@ -78,15 +84,22 @@
 
       [Install]
       WantedBy=multi-user.target
-  notify: Reload systemd
+
+- name: Reload systemd
+  when: systemd_check.stat.exists
+  systemd:
+    daemon_reload: yes
 
 - name: Enable ComfyUI service
+  when: systemd_check.stat.exists
   systemd:
     name: comfyui
     enabled: yes
-    daemon_reload: yes
 
-handlers:
-  - name: Reload systemd
-    systemd:
-      daemon_reload: yes
+- name: Display startup instructions (container)
+  when: not systemd_check.stat.exists
+  debug:
+    msg: |
+      Container detected - no systemd.
+      Start ComfyUI manually: {{ workspace_dir }}/start-comfyui.sh
+      Or: cd {{ comfyui_dir }} && python main.py --listen 0.0.0.0 --port 8188 &

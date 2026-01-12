@@ -1,0 +1,15 @@
+---
+# Tailscale role defaults
+#
+# REQUIRED: Set tailscale_authkey via:
+#   - Environment variable: export TAILSCALE_AUTHKEY=tskey-auth-xxx
+#   - Command line: -e "tailscale_authkey=tskey-auth-xxx"
+#   - Ansible vault
+#
+# Get your authkey at: https://login.tailscale.com/admin/settings/keys
+
+# Hostname for this node on the Tailscale network
+tailscale_hostname: runpod-comfyui
+
+# Accept routes from other nodes (for subnet routing)
+tailscale_accept_routes: true

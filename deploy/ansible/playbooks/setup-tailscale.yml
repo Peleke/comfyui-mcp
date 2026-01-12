@@ -1,0 +1,75 @@
+---
+# Tailscale Setup Playbook
+#
+# Installs and configures Tailscale on RunPod for private mesh networking.
+# After running, the pod is accessible as "runpod-comfyui" from any Tailscale device.
+#
+# Prerequisites:
+#   1. Get auth key from https://login.tailscale.com/admin/settings/keys
+#   2. Export: TAILSCALE_AUTHKEY=tskey-auth-xxx
+#
+# Usage:
+#   ansible-playbook -i inventory/runpod-proxy.yml playbooks/setup-tailscale.yml
+#
+# Or with inline authkey:
+#   ansible-playbook -i inventory/runpod-proxy.yml playbooks/setup-tailscale.yml \
+#     -e "tailscale_authkey=tskey-auth-xxx"
+
+- name: Setup Tailscale on RunPod
+  hosts: runpod
+  gather_facts: yes
+
+  vars:
+    tailscale_hostname: runpod-comfyui
+    tailscale_accept_routes: true
+
+  pre_tasks:
+    - name: Validate Tailscale auth key is provided
+      fail:
+        msg: |
+          TAILSCALE_AUTHKEY not set!
+
+          Get your auth key from: https://login.tailscale.com/admin/settings/keys
+          Then run:
+            export TAILSCALE_AUTHKEY=tskey-auth-xxx
+            ansible-playbook -i inventory/runpod-proxy.yml playbooks/setup-tailscale.yml
+      when: tailscale_authkey is not defined or tailscale_authkey == ""
+
+    - name: Display configuration
+      debug:
+        msg: |
+          Tailscale Setup
+          ===============
+          Hostname: {{ tailscale_hostname }}
+          Accept routes: {{ tailscale_accept_routes }}
+
+  roles:
+    - role: tailscale
+      tags: [tailscale]
+
+  post_tasks:
+    - name: Verify ComfyUI is accessible
+      uri:
+        url: http://127.0.0.1:8188/system_stats
+        method: GET
+        return_content: yes
+      register: comfyui_check
+      ignore_errors: yes
+
+    - name: Display connection info
+      debug:
+        msg: |
+          ==========================================
+          Tailscale Setup Complete!
+          ==========================================
+
+          Pod is now accessible as: {{ tailscale_hostname }}
+          Tailscale IP: {{ ts_ip.stdout | default('(check with: tailscale ip -4)') }}
+
+          ComfyUI Status: {{ 'Running on :8188' if comfyui_check.status == 200 else 'NOT RUNNING - start ComfyUI first!' }}
+
+          From any Tailscale device:
+            curl http://{{ tailscale_hostname }}:8188/system_stats
+
+          For Fly.io deployment, set:
+            fly secrets set COMFYUI_URL="http://{{ tailscale_hostname }}:8188"
