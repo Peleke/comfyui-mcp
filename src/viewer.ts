@@ -11,17 +11,14 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs/promises";
 import * as path from "path";
-import {
-  UploadResult,
-  ViewOptions,
-  isHeadless,
-  getDefaultViewOptions,
-} from "./storage/provider.js";
+import type { UploadResult, ViewOptions } from "./storage/provider.js";
+import { isHeadless, getDefaultViewOptions } from "./storage/provider.js";
 
 const execAsync = promisify(exec);
 
 // Re-export for convenience
-export { ViewOptions, isHeadless, getDefaultViewOptions };
+export type { ViewOptions };
+export { isHeadless, getDefaultViewOptions };
 
 /**
  * Open a URL in the default browser

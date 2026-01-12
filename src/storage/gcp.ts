@@ -13,7 +13,7 @@
 import { Storage, Bucket, File } from "@google-cloud/storage";
 import * as fs from "fs/promises";
 import * as path from "path";
-import {
+import type {
   StorageProvider,
   StorageObject,
   UploadResult,

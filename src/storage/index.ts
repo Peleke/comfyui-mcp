@@ -21,23 +21,31 @@
  * - STORAGE_LOCAL_PATH (default: /tmp/comfyui-storage)
  */
 
-// Re-export types and interfaces
-export {
+// Re-export types and interfaces (type-only for interfaces)
+export type {
   StorageProvider,
   StorageObject,
   UploadResult,
   HealthCheckResult,
   StorageProviderType,
   StorageConfig,
-  getStorageConfigFromEnv,
 } from "./provider.js";
 
-// Re-export implementations
-export { LocalStorageProvider, LocalStorageConfig } from "./local.js";
-export { SupabaseStorageProvider, SupabaseStorageConfig } from "./supabase.js";
-export { GCPStorageProvider, GCPStorageConfig } from "./gcp.js";
+// Re-export runtime functions
+export { getStorageConfigFromEnv } from "./provider.js";
 
-import { StorageProvider, StorageConfig, getStorageConfigFromEnv } from "./provider.js";
+// Re-export implementations (classes)
+export { LocalStorageProvider } from "./local.js";
+export { SupabaseStorageProvider } from "./supabase.js";
+export { GCPStorageProvider } from "./gcp.js";
+
+// Re-export config types (interfaces - type-only export for runtime safety)
+export type { LocalStorageConfig } from "./local.js";
+export type { SupabaseStorageConfig } from "./supabase.js";
+export type { GCPStorageConfig } from "./gcp.js";
+
+import type { StorageProvider, StorageConfig } from "./provider.js";
+import { getStorageConfigFromEnv } from "./provider.js";
 import { LocalStorageProvider } from "./local.js";
 import { SupabaseStorageProvider } from "./supabase.js";
 import { GCPStorageProvider } from "./gcp.js";

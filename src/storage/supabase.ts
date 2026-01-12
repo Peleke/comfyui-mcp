@@ -13,7 +13,7 @@
 import { StorageClient } from "@supabase/storage-js";
 import * as fs from "fs/promises";
 import * as path from "path";
-import {
+import type {
   StorageProvider,
   StorageObject,
   UploadResult,
