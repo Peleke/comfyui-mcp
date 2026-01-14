@@ -165,17 +165,57 @@ export class ComfyUIClient {
     promptId: string,
     onProgress?: (value: number, max: number) => void
   ): Promise<HistoryItem> {
+    // Check immediately in case generation already completed (fast generations)
+    const immediateCheck = await this.getHistory(promptId);
+    if (immediateCheck?.status?.completed) {
+      return immediateCheck;
+    }
+
     const clientId = `mcp-${Date.now()}`;
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${this.wsUrl}/ws?clientId=${clientId}`);
       let resolved = false;
+      let pollInterval: ReturnType<typeof setInterval> | null = null;
 
       const cleanup = () => {
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
         if (ws.readyState === WebSocket.OPEN) {
           ws.close();
         }
       };
+
+      const handleCompletion = async () => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+
+        // Small delay to ensure history is updated
+        await new Promise((r) => setTimeout(r, 50));
+        const history = await this.getHistory(promptId);
+        if (history) {
+          resolve(history);
+        } else {
+          reject(new Error("Failed to get history after completion"));
+        }
+      };
+
+      // Start parallel polling alongside WebSocket (belt and suspenders)
+      // Poll every 500ms to catch completion quickly even if WebSocket misses it
+      pollInterval = setInterval(async () => {
+        if (resolved) return;
+        try {
+          const history = await this.getHistory(promptId);
+          if (history?.status?.completed) {
+            await handleCompletion();
+          }
+        } catch {
+          // Ignore poll errors, WebSocket is primary
+        }
+      }, 500);
 
       ws.on("open", () => {
         // WebSocket connected, now wait for messages
@@ -192,38 +232,21 @@ export class ComfyUIClient {
           if (message.type === "executing" && message.data.prompt_id === promptId) {
             if (message.data.node === null) {
               // Execution complete
-              resolved = true;
-              cleanup();
-
-              // Small delay to ensure history is updated
-              await new Promise((r) => setTimeout(r, 100));
-              const history = await this.getHistory(promptId);
-              if (history) {
-                resolve(history);
-              } else {
-                reject(new Error("Failed to get history after completion"));
-              }
+              await handleCompletion();
             }
           }
-        } catch (e) {
+        } catch {
           // Ignore parse errors for binary messages
         }
       });
 
       ws.on("error", (error) => {
-        if (!resolved) {
-          cleanup();
-          reject(error);
-        }
+        // Don't reject on WebSocket error - polling will continue
+        console.error("WebSocket error (polling continues):", error.message);
       });
 
       ws.on("close", () => {
-        if (!resolved) {
-          // Fallback: poll for completion
-          this.pollForCompletion(promptId)
-            .then(resolve)
-            .catch(reject);
-        }
+        // WebSocket closed but polling continues - no action needed
       });
 
       // Timeout (default 10 minutes, configurable via COMFYUI_TIMEOUT env var)
@@ -237,13 +260,14 @@ export class ComfyUIClient {
     });
   }
 
-  private async pollForCompletion(promptId: string, maxAttempts = 300): Promise<HistoryItem> {
+  private async pollForCompletion(promptId: string, maxAttempts = 600): Promise<HistoryItem> {
+    // Faster polling: 500ms intervals, 600 attempts = 5 minutes
     for (let i = 0; i < maxAttempts; i++) {
       const history = await this.getHistory(promptId);
       if (history?.status?.completed) {
         return history;
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error("Generation timed out");
   }

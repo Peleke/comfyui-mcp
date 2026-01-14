@@ -9,15 +9,34 @@
  * 4. Generate a tiny test image (4 steps)
  *
  * Usage:
- *   npx tsx src/e2e/smoke-test.ts
+ *   npx tsx src/e2e/smoke-test.ts [options]
+ *
+ * Options:
+ *   --open        Open result in browser
+ *   --no-open     Don't open in browser
+ *   --download    Download to local ./output
+ *   --no-download Skip download (URL only)
+ *   --output=PATH Download to specific path
  *
  * Takes ~30 seconds on a good GPU.
  */
 
 import { ComfyUIClient } from "../comfyui-client.js";
 import { checkConnection, pingComfyUI } from "../tools/health.js";
+import {
+  parseViewFlags,
+  openInBrowser,
+  isHeadless,
+  getDefaultViewOptions,
+} from "../viewer.js";
 
 const mbToGb = (mb: number) => (mb / 1024).toFixed(1);
+
+// Parse CLI args
+const viewOptions = {
+  ...getDefaultViewOptions(),
+  ...parseViewFlags(process.argv.slice(2)),
+};
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
@@ -85,6 +104,7 @@ async function main() {
 
   // Test 4: Quick generation (if models available)
   process.stdout.write("4. Quick generation (4 steps)... ");
+  let outputPath = "/tmp/smoke-test.png";
   try {
     const models = await client.getModels();
     if (models.length === 0) {
@@ -93,7 +113,7 @@ async function main() {
       const { generateImage } = await import("../tools/generate.js");
       const start = Date.now();
 
-      await generateImage(
+      const result = await generateImage(
         client,
         {
           prompt: "test image, simple",
@@ -105,13 +125,24 @@ async function main() {
           scheduler: "normal",
           width: 512,
           height: 512,
-          output_path: "/tmp/smoke-test.png",
+          output_path: outputPath,
+          upload_to_cloud: false, // Skip cloud upload in smoke test
         },
         models[0]
       );
 
+      outputPath = result.path;
       const duration = ((Date.now() - start) / 1000).toFixed(1);
       console.log(`${GREEN}✓${RESET} Generated in ${duration}s`);
+      console.log(`   Output: ${outputPath}`);
+
+      // Auto-open if requested
+      if (viewOptions.autoOpen) {
+        const opened = await openInBrowser(`file://${outputPath}`);
+        if (opened) {
+          console.log(`   ${GREEN}Opened in browser${RESET}`);
+        }
+      }
     }
   } catch (e) {
     console.log(`${RED}✗${RESET}`);
@@ -119,7 +150,11 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\n${GREEN}✓ All smoke tests passed!${RESET}\n`);
+  console.log(`\n${GREEN}✓ All smoke tests passed!${RESET}`);
+  console.log(`\nView options: autoOpen=${viewOptions.autoOpen}, download=${viewOptions.download}`);
+  if (!isHeadless()) {
+    console.log(`Output: file://${outputPath}\n`);
+  }
 }
 
 main().catch((e) => {

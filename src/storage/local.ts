@@ -9,7 +9,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { createReadStream, createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
-import {
+import type {
   StorageProvider,
   StorageObject,
   UploadResult,

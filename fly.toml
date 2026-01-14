@@ -1,0 +1,53 @@
+# fly.toml app configuration file generated for comfyui-mcp on 2026-01-11T08:46:46-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'comfyui-mcp'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  COMFYUI_OUTPUT_DIR = '/tmp/comfyui-output'
+  ENABLE_ASYNC_QUEUES = 'true'
+  NODE_ENV = 'production'
+  PORT = '3001'
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 3001
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [services.concurrency]
+    type = 'connections'
+    hard_limit = 25
+    soft_limit = 20
+
+  [[services.http_checks]]
+    interval = '15s'
+    timeout = '5s'
+    method = 'GET'
+    path = '/ping'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512

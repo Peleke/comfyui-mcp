@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+!docker-entrypoint.sh
+.env*
+*.log
+*.test.ts
+__mocks__
+coverage
+.vscode
+.idea
+deploy
+docs
+vitest.config.ts

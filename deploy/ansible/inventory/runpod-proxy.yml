@@ -1,0 +1,30 @@
+# RunPod Inventory - Proxy SSH Connection
+#
+# Uses RunPod's SSH proxy (works even when direct TCP is refused)
+#
+# Usage:
+#   export TAILSCALE_AUTHKEY=tskey-auth-xxx
+#   ansible-playbook -i inventory/runpod-proxy.yml playbooks/setup-tailscale.yml
+
+all:
+  hosts:
+    runpod:
+      # RunPod proxy SSH (format: <pod-id>@ssh.runpod.io)
+      ansible_host: ssh.runpod.io
+      ansible_user: "{{ lookup('env', 'RUNPOD_POD_ID') | default('81ugvdoyz7g0ic-64410eaf', true) }}"
+
+      # SSH key
+      ansible_ssh_private_key_file: "{{ lookup('env', 'RUNPOD_SSH_KEY') | default('~/.ssh/runpod_ed25519', true) }}"
+
+      # Disable host key checking
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  vars:
+    # Paths on RunPod
+    workspace_dir: /workspace
+    comfyui_dir: /workspace/ComfyUI
+
+    # Tailscale config
+    tailscale_authkey: "{{ lookup('env', 'TAILSCALE_AUTHKEY') }}"
+    tailscale_hostname: runpod-comfyui
+    tailscale_accept_routes: true

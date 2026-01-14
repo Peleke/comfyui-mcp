@@ -10,7 +10,14 @@
  * 5. Cloud upload verification
  *
  * Usage:
- *   npx tsx src/e2e/gpu-pipeline.ts
+ *   npx tsx src/e2e/gpu-pipeline.ts [options]
+ *
+ * Options:
+ *   --open        Open results in browser
+ *   --no-open     Don't open in browser (default on headless)
+ *   --download    Download to local ./output
+ *   --no-download Skip download (URL only, default on headless)
+ *   --output=PATH Download to specific path
  *
  * Environment:
  *   COMFYUI_URL - RunPod proxy URL (required)
@@ -20,11 +27,24 @@
 
 import { ComfyUIClient } from "../comfyui-client.js";
 import { checkConnection, pingComfyUI, HealthCheckResult } from "../tools/health.js";
+import {
+  parseViewFlags,
+  openInBrowser,
+  getViewableUrl,
+  getDefaultViewOptions,
+  isHeadless,
+} from "../viewer.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 
 // Helper to convert MB to GB
 const mbToGb = (mb: number) => (mb / 1024).toFixed(1);
+
+// Parse CLI args
+const viewOptions = {
+  ...getDefaultViewOptions(),
+  ...parseViewFlags(process.argv.slice(2)),
+};
 
 // ANSI colors for output
 const GREEN = "\x1b[32m";
@@ -321,8 +341,22 @@ async function main() {
       const remotePath = `e2e-tests/e2e-test-${Date.now()}.png`;
       const result = await provider.upload(testFile, remotePath);
 
-      log(`  Uploaded to: ${result.url}`, GREEN);
-      return { url: result.url };
+      // Get the best viewable URL (signed for private buckets)
+      const viewUrl = getViewableUrl(result);
+      log(`  Uploaded to: ${result.path}`, GREEN);
+      if (viewUrl) {
+        log(`  View URL: ${viewUrl}`, CYAN);
+
+        // Auto-open if requested
+        if (viewOptions.autoOpen) {
+          const opened = await openInBrowser(viewUrl);
+          if (opened) {
+            log(`  Opened in browser`, GREEN);
+          }
+        }
+      }
+
+      return { url: viewUrl, path: result.path, signedUrl: result.signedUrl };
     });
   } else {
     log("  Skipping: STORAGE_PROVIDER not set or is 'local'", YELLOW);

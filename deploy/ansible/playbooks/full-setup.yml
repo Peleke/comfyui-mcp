@@ -33,6 +33,7 @@
     install_sdxl: true
     install_tts: true
     install_lipsync: true
+    install_tailscale: "{{ tailscale_authkey is defined }}"
 
   pre_tasks:
     - name: Display setup configuration
@@ -48,6 +49,7 @@
           - SDXL models: {{ install_sdxl }}
           - TTS (F5-TTS): {{ install_tts }}
           - Lip-sync (LatentSync): {{ install_lipsync }}
+          - Tailscale VPN: {{ install_tailscale }}
 
     - name: Check disk space
       shell: df -h {{ workspace_dir }} | tail -1 | awk '{print $4}'
@@ -76,6 +78,10 @@
     - role: tts
       tags: [tts]
       when: install_tts | default(true)
+
+    - role: tailscale
+      tags: [tailscale, network]
+      when: install_tailscale | default(false)
 
   post_tasks:
     - name: Start ComfyUI service
@@ -114,7 +120,13 @@
           Access via RunPod proxy URL (port 8188)
 
           Next steps:
+          {% if install_tailscale %}
+          1. Verify Tailscale: tailscale status
+          2. Access via Tailscale: http://runpod-comfyui:8188
+          3. Set COMFYUI_URL=http://runpod-comfyui:8188 in Fly.io secrets
+          {% else %}
           1. Get proxy URL from RunPod dashboard
           2. Set COMFYUI_URL environment variable
           3. Test with: curl https://<pod-id>-8188.proxy.runpod.net/system_stats
+          {% endif %}
       tags: [verify]
