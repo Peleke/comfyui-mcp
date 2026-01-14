@@ -1,0 +1,123 @@
+name: GPU Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - 'status'        # Check current state
+          - 'wake'          # Enable workers (max=3)
+          - 'sleep'         # Disable workers (max=0)
+          - 'scale'         # Custom scale
+      max_workers:
+        description: 'Max workers (only for scale action)'
+        type: number
+        default: 3
+      min_workers:
+        description: 'Min workers (only for scale action, use 1+ for always-on)'
+        type: number
+        default: 0
+
+  # Auto-sleep at midnight UTC (cost control)
+  schedule:
+    - cron: '0 0 * * *'  # Midnight UTC daily
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.11.0
+
+      - name: Terraform Init
+        run: tofu init
+
+      - name: Determine action
+        id: action
+        run: |
+          ACTION="${{ inputs.action || 'sleep' }}"  # Default to sleep for scheduled runs
+
+          case "$ACTION" in
+            status)
+              echo "Getting current status..."
+              echo "action=status" >> $GITHUB_OUTPUT
+              ;;
+            wake)
+              echo "Waking up workers..."
+              echo "action=apply" >> $GITHUB_OUTPUT
+              echo "max_workers=3" >> $GITHUB_OUTPUT
+              echo "min_workers=0" >> $GITHUB_OUTPUT
+              ;;
+            sleep)
+              echo "Putting workers to sleep..."
+              echo "action=apply" >> $GITHUB_OUTPUT
+              echo "max_workers=0" >> $GITHUB_OUTPUT
+              echo "min_workers=0" >> $GITHUB_OUTPUT
+              ;;
+            scale)
+              echo "Custom scaling..."
+              echo "action=apply" >> $GITHUB_OUTPUT
+              echo "max_workers=${{ inputs.max_workers }}" >> $GITHUB_OUTPUT
+              echo "min_workers=${{ inputs.min_workers }}" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Get current state
+        if: steps.action.outputs.action == 'status'
+        env:
+          TF_VAR_runpod_api_key: ${{ secrets.RUNPOD_API_KEY }}
+          TF_VAR_template_id: ${{ secrets.RUNPOD_TEMPLATE_ID }}
+        run: |
+          tofu refresh
+          echo "## 📊 Current Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Endpoint ID | \`$(tofu output -raw endpoint_id)\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Min Workers | $(tofu state show runpod_endpoint.comfyui | grep workers_min | awk '{print $3}') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Max Workers | $(tofu state show runpod_endpoint.comfyui | grep workers_max | awk '{print $3}') |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Apply scaling
+        if: steps.action.outputs.action == 'apply'
+        env:
+          TF_VAR_runpod_api_key: ${{ secrets.RUNPOD_API_KEY }}
+          TF_VAR_template_id: ${{ secrets.RUNPOD_TEMPLATE_ID }}
+          TF_VAR_min_workers: ${{ steps.action.outputs.min_workers }}
+          TF_VAR_max_workers: ${{ steps.action.outputs.max_workers }}
+        run: |
+          tofu apply -auto-approve
+
+          ACTION="${{ inputs.action || 'sleep' }}"
+          if [ "$ACTION" == "sleep" ]; then
+            EMOJI="😴"
+            MSG="Workers are now sleeping (max=0)"
+          elif [ "$ACTION" == "wake" ]; then
+            EMOJI="☀️"
+            MSG="Workers are now awake (max=3)"
+          else
+            EMOJI="⚖️"
+            MSG="Scaled to min=${{ steps.action.outputs.min_workers }}, max=${{ steps.action.outputs.max_workers }}"
+          fi
+
+          echo "## $EMOJI $MSG" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Endpoint: \`$(tofu output -raw endpoint_id)\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on scheduled sleep
+        if: github.event_name == 'schedule'
+        run: |
+          echo "## 😴 Scheduled Sleep" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Workers automatically set to max=0 at midnight UTC." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To wake up, run: \`gh workflow run gpu-control.yml -f action=wake\`" >> $GITHUB_STEP_SUMMARY
