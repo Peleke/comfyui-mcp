@@ -254,10 +254,11 @@ function getPreprocessorClass(type: ControlNetType): string | null {
     case "openpose":
       return "DWPreprocessor";
     case "scribble":
+      return "ScribblePreprocessor";
     case "lineart":
-      return "AnyLineArtPreprocessor";
+      return "LineArtPreprocessor";
     case "semantic_seg":
-      return "OneFormer-ADE20K-SemSegPreprocessor";
+      return "UniFormer-SemSegPreprocessor";
     case "qrcode":
       return null; // QR Code doesn't need preprocessing
     default:
