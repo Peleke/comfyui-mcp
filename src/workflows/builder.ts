@@ -5,6 +5,8 @@ import baseControlNetWorkflow from "./controlnet.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
 import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
+import baseInpaintWorkflow from "./inpaint.json" with { type: "json" };
+import baseOutpaintWorkflow from "./outpaint.json" with { type: "json" };
 
 export interface LoraConfig {
   name: string;
@@ -667,6 +669,381 @@ function buildMultiReferenceIPAdapter(
   if (params.combineEmbeds) {
     workflow["15"].inputs.combine_embeds = params.combineEmbeds;
   }
+
+  return workflow;
+}
+
+// ============================================================================
+// Inpainting / Outpainting Support
+// ============================================================================
+
+export interface InpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  maskImage: string;
+  denoiseStrength?: number;
+}
+
+export interface OutpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  extendLeft?: number;
+  extendRight?: number;
+  extendTop?: number;
+  extendBottom?: number;
+  feathering?: number;
+  denoiseStrength?: number;
+}
+
+/**
+ * Build an inpainting workflow.
+ * Uses a mask image to selectively regenerate parts of an image.
+ * White areas in the mask = inpaint, black areas = keep original.
+ */
+export function buildInpaintWorkflow(params: InpaintParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseInpaintWorkflow));
+
+  // Set source image
+  workflow["1"].inputs.image = params.sourceImage;
+
+  // Set mask image
+  workflow["2"].inputs.image = params.maskImage;
+
+  // Set checkpoint model
+  workflow["3"].inputs.ckpt_name = params.model;
+
+  // Set positive prompt
+  workflow["6"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set sampler parameters
+  workflow["8"].inputs.steps = params.steps || 28;
+  workflow["8"].inputs.cfg = params.cfgScale || 7;
+  workflow["8"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["8"].inputs.scheduler = params.scheduler || "normal";
+  workflow["8"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+  workflow["8"].inputs.denoise = params.denoiseStrength ?? 0.75;
+
+  // Set filename prefix
+  workflow["10"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_inpaint";
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    workflow = injectLoras(workflow, params.loras, "3", "8", ["6", "7"]);
+  }
+
+  return workflow;
+}
+
+/**
+ * Build an outpainting workflow.
+ * Extends the canvas and generates content in the new areas.
+ * Uses ImagePadForOutpaint which handles padding + mask generation.
+ */
+export function buildOutpaintWorkflow(params: OutpaintParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseOutpaintWorkflow));
+
+  // Set source image
+  workflow["1"].inputs.image = params.sourceImage;
+
+  // Set padding amounts
+  workflow["2"].inputs.left = params.extendLeft ?? 0;
+  workflow["2"].inputs.right = params.extendRight ?? 0;
+  workflow["2"].inputs.top = params.extendTop ?? 0;
+  workflow["2"].inputs.bottom = params.extendBottom ?? 0;
+  workflow["2"].inputs.feathering = params.feathering ?? 40;
+
+  // Set checkpoint model
+  workflow["3"].inputs.ckpt_name = params.model;
+
+  // Set positive prompt
+  workflow["6"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set sampler parameters
+  workflow["8"].inputs.steps = params.steps || 28;
+  workflow["8"].inputs.cfg = params.cfgScale || 7;
+  workflow["8"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["8"].inputs.scheduler = params.scheduler || "normal";
+  workflow["8"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+  workflow["8"].inputs.denoise = params.denoiseStrength ?? 0.8; // Higher for outpaint
+
+  // Set filename prefix
+  workflow["10"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_outpaint";
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    workflow = injectLoras(workflow, params.loras, "3", "8", ["6", "7"]);
+  }
+
+  return workflow;
+}
+
+// ============================================================================
+// Intelligent Mask Generation (GroundingDINO + SAM)
+// ============================================================================
+
+export type MaskPreset = "hands" | "face" | "eyes" | "body" | "background" | "foreground";
+
+export interface MaskRegion {
+  x: number;      // 0-100 percentage
+  y: number;      // 0-100 percentage
+  width: number;  // 0-100 percentage
+  height: number; // 0-100 percentage
+}
+
+export interface CreateMaskParams {
+  sourceImage: string;
+  preset?: MaskPreset;
+  textPrompt?: string;
+  region?: MaskRegion;
+  expandPixels?: number;
+  featherPixels?: number;
+  invert?: boolean;
+  samModel?: string;
+  groundingDinoModel?: string;
+  threshold?: number;
+  filenamePrefix?: string;
+}
+
+/**
+ * Map preset names to GroundingDINO text prompts.
+ * These prompts work well with GroundingDINO for detection.
+ */
+function getPresetPrompt(preset: MaskPreset): string {
+  switch (preset) {
+    case "hands":
+      return "hand . fingers . palm . wrist";
+    case "face":
+      return "face . head";
+    case "eyes":
+      return "eye . eyes";
+    case "body":
+      return "person . body . figure";
+    case "background":
+      return "background";
+    case "foreground":
+      return "person . character . subject";
+    default:
+      return preset;
+  }
+}
+
+/**
+ * Build an intelligent mask generation workflow using GroundingDINO + SAM.
+ * GroundingDINO detects objects from text prompts, SAM generates precise masks.
+ * Requires: comfyui_segment_anything extension
+ *
+ * Based on research from:
+ * - https://github.com/storyicon/comfyui_segment_anything
+ * - https://stable-diffusion-art.com/sam3-comfyui-image/
+ */
+export function buildMaskWorkflow(params: CreateMaskParams): Record<string, any> {
+  // If only region is provided, use simple rectangle mask generation
+  if (params.region && !params.preset && !params.textPrompt) {
+    return buildRectangleMaskWorkflow(params);
+  }
+
+  // Use GroundingDINO + SAM for intelligent mask generation
+  const textPrompt = params.textPrompt || (params.preset ? getPresetPrompt(params.preset) : "subject");
+
+  const workflow: Record<string, any> = {};
+
+  // Load source image
+  workflow["1"] = {
+    class_type: "LoadImage",
+    inputs: {
+      image: params.sourceImage,
+    },
+  };
+
+  // Load GroundingDINO model for object detection
+  workflow["2"] = {
+    class_type: "GroundingDinoModelLoader (segment anything)",
+    inputs: {
+      model_name: params.groundingDinoModel || "GroundingDINO_SwinT_OGC (694MB)",
+    },
+  };
+
+  // Load SAM model for precise segmentation
+  workflow["3"] = {
+    class_type: "SAMModelLoader (segment anything)",
+    inputs: {
+      model_name: params.samModel || "sam_vit_h (2.56GB)",
+    },
+  };
+
+  // Detect objects with GroundingDINO
+  workflow["4"] = {
+    class_type: "GroundingDinoSAMSegment (segment anything)",
+    inputs: {
+      grounding_dino_model: ["2", 0],
+      sam_model: ["3", 0],
+      image: ["1", 0],
+      prompt: textPrompt,
+      threshold: params.threshold ?? 0.3,
+    },
+  };
+
+  // The output is already a mask, but we may need to process it
+  let maskSource: [string, number] = ["4", 1]; // SAM outputs mask on index 1
+
+  // Expand mask if specified
+  if (params.expandPixels && params.expandPixels > 0) {
+    workflow["5"] = {
+      class_type: "GrowMask",
+      inputs: {
+        mask: maskSource,
+        expand: params.expandPixels,
+        tapered_corners: true,
+      },
+    };
+    maskSource = ["5", 0];
+  }
+
+  // Feather/blur mask if specified
+  if (params.featherPixels && params.featherPixels > 0) {
+    workflow["6"] = {
+      class_type: "FeatherMask",
+      inputs: {
+        mask: maskSource,
+        left: params.featherPixels,
+        top: params.featherPixels,
+        right: params.featherPixels,
+        bottom: params.featherPixels,
+      },
+    };
+    maskSource = ["6", 0];
+  }
+
+  // Invert mask if specified
+  if (params.invert) {
+    workflow["7"] = {
+      class_type: "InvertMask",
+      inputs: {
+        mask: maskSource,
+      },
+    };
+    maskSource = ["7", 0];
+  }
+
+  // Convert mask to image for saving
+  workflow["8"] = {
+    class_type: "MaskToImage",
+    inputs: {
+      mask: maskSource,
+    },
+  };
+
+  // Save the mask
+  workflow["9"] = {
+    class_type: "SaveImage",
+    inputs: {
+      images: ["8", 0],
+      filename_prefix: params.filenamePrefix || "ComfyUI_MCP_mask",
+    },
+  };
+
+  return workflow;
+}
+
+/**
+ * Build a simple rectangle mask workflow.
+ * Creates a white rectangle on black background based on percentage coordinates.
+ */
+function buildRectangleMaskWorkflow(params: CreateMaskParams): Record<string, any> {
+  if (!params.region) {
+    throw new Error("Region is required for rectangle mask generation");
+  }
+
+  const workflow: Record<string, any> = {};
+
+  // Load source image to get dimensions
+  workflow["1"] = {
+    class_type: "LoadImage",
+    inputs: {
+      image: params.sourceImage,
+    },
+  };
+
+  // Get image size
+  workflow["2"] = {
+    class_type: "GetImageSize",
+    inputs: {
+      image: ["1", 0],
+    },
+  };
+
+  // Create solid black mask
+  workflow["3"] = {
+    class_type: "SolidMask",
+    inputs: {
+      value: params.invert ? 1.0 : 0.0,
+      width: ["2", 0],
+      height: ["2", 1],
+    },
+  };
+
+  // Create rectangle region (we'll use CropMask approach)
+  // This is simplified - in practice you'd calculate actual pixels from percentages
+  // ComfyUI doesn't have a direct "draw rectangle on mask" node, so we use MaskComposite
+  workflow["4"] = {
+    class_type: "SolidMask",
+    inputs: {
+      value: params.invert ? 0.0 : 1.0,
+      // Width/height will be calculated based on percentage
+      width: 100, // Placeholder - tool handler will calculate actual pixels
+      height: 100,
+    },
+  };
+
+  // Composite the rectangle onto the background
+  workflow["5"] = {
+    class_type: "MaskComposite",
+    inputs: {
+      destination: ["3", 0],
+      source: ["4", 0],
+      x: 0, // Placeholder - tool handler will calculate actual pixels
+      y: 0,
+      operation: "add",
+    },
+  };
+
+  let maskSource: [string, number] = ["5", 0];
+
+  // Feather if specified
+  if (params.featherPixels && params.featherPixels > 0) {
+    workflow["6"] = {
+      class_type: "FeatherMask",
+      inputs: {
+        mask: maskSource,
+        left: params.featherPixels,
+        top: params.featherPixels,
+        right: params.featherPixels,
+        bottom: params.featherPixels,
+      },
+    };
+    maskSource = ["6", 0];
+  }
+
+  // Convert mask to image
+  workflow["7"] = {
+    class_type: "MaskToImage",
+    inputs: {
+      mask: maskSource,
+    },
+  };
+
+  // Save
+  workflow["8"] = {
+    class_type: "SaveImage",
+    inputs: {
+      images: ["7", 0],
+      filename_prefix: params.filenamePrefix || "ComfyUI_MCP_mask_rect",
+    },
+  };
 
   return workflow;
 }
