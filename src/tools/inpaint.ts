@@ -368,7 +368,7 @@ export async function createMask(
   if (upload_to_cloud && isCloudStorageConfigured()) {
     try {
       const storage = getStorageProvider();
-      const remotePath = generateRemotePath("masks", basename(input.output_path));
+      const remotePath = generateRemotePath("images", basename(input.output_path));
       const uploadResult = await storage.upload(input.output_path, remotePath);
       remote_url = uploadResult.signedUrl || uploadResult.url || undefined;
     } catch (uploadErr) {
