@@ -59,3 +59,39 @@ npx vitest run
 
 - `ComfyUI/input/avatars/` - Portrait images for lip-sync
 - `ComfyUI/input/voices/` - Voice reference audio for TTS cloning
+
+## Build Journal
+
+After completing significant work (features, debugging sessions, deployments, 2+ hour focused sessions), write a build journal entry.
+
+**Location:** `buildlog/YYYY-MM-DD-{slug}.md`
+**Template:** `buildlog/_TEMPLATE.md`
+
+### Required Sections
+
+1. **The Goal** - What we built and why
+2. **What We Built** - Architecture diagram, components table
+3. **The Journey** - Chronological INCLUDING mistakes, wrong turns, actual error messages
+4. **Test Results** - Actual commands run, actual outputs received
+5. **Code Samples** - Key snippets with context (not full files)
+6. **AI Experience Reflection** - Meta-commentary on the collaboration:
+   - What worked well
+   - What was frustrating or unclear
+   - Communication observations (pace, tone, interruptions)
+   - Lessons for next time
+
+### Quality Bar
+
+Each entry should be publishable as a **$500-750 tutorial article** (Envato Tuts+, Manning book chapter, Dev.to). This means:
+- Real error messages, not sanitized
+- Honest about what didn't work
+- Complete code samples that actually run
+
+### When to Write
+
+- After major feature/component completion
+- After significant debugging session resolved
+- After infrastructure deployment
+- Before context-switching to different work
+
+**Proactive:** At natural stopping points, ask: "Should I write a build journal entry for this work?"
