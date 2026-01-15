@@ -18,7 +18,7 @@ So I distributed it.
 
 The MCP server runs on Fly.io—stateless, auto-scaling. GPU compute lives on RunPod, pay-per-second. Generated assets go to Supabase with signed URLs. Tailscale meshes it all together securely. What started as "let me generate some images" became a production distributed system because the alternative was a space heater that outputs nothing.
 
-Now Claude can generate images, upscale them, run ControlNet pipelines, synthesize speech, and create lip-synced talking head videos—all through natural conversation. **35+ tools. 467 tests. No API fees. Full parameter control.**
+Now Claude can generate images, upscale them, run ControlNet pipelines, do intelligent inpainting/outpainting, transfer styles with IP-Adapter, synthesize speech, and create lip-synced talking head videos—all through natural conversation. **37 tools. 745 tests. No API fees. Full parameter control.**
 
 ```
 You: "Generate a cyberpunk cityscape at sunset and save it to ./assets/hero.png"
@@ -38,6 +38,14 @@ Claude: I'll generate that image for you.
 - **Image-to-Image**: Transform existing images with AI guidance
 - **AI Upscaling**: Enhance resolution using RealESRGAN and other models
 - **LoRA Support**: Apply custom style and character LoRAs with adjustable weights
+- **ControlNet**: Guide generation with edge detection, depth maps, poses, and more
+- **IP-Adapter**: Transfer style and composition from reference images
+- **Inpainting**: Selectively regenerate masked regions while preserving context
+- **Outpainting**: Extend canvas in any direction with coherent AI generation
+- **Intelligent Masks**: Auto-generate masks using GroundingDINO + SAM segmentation
+- **Text-to-Speech**: Clone voices with F5-TTS from short audio samples
+- **Lip-Sync Video**: Create talking head videos with SONIC
+- **Portrait Generation**: Multi-backend avatar creation (SDXL, Flux GGUF, Flux FP8)
 - **Model Discovery**: List available checkpoints, LoRAs, samplers, and schedulers
 - **Queue Monitoring**: Check generation status and pending jobs
 
@@ -229,6 +237,128 @@ Get tips and example prompts for a specific model family.
 
 List all supported model families and their prompting characteristics.
 
+### ControlNet Tools
+
+Guide image generation using structural information from reference images.
+
+| Tool | Description |
+|------|-------------|
+| generate_with_controlnet | Single ControlNet conditioning (canny, depth, pose, etc.) |
+| generate_with_multi_controlnet | Combine multiple ControlNet conditions |
+| preprocess_control_image | Preview control signal (edge map, skeleton, etc.) |
+| generate_with_hidden_image | Embed hidden images using QR Code ControlNet |
+| stylize_photo | Transform photos to artistic styles (anime, oil painting) |
+| generate_with_pose | Copy exact pose from reference using OpenPose |
+| generate_with_composition | Match layout/composition using semantic segmentation |
+| list_controlnet_models | List available ControlNet models by type |
+
+**Supported control types:** `canny`, `depth`, `openpose`, `qrcode`, `scribble`, `lineart`, `semantic_seg`
+
+### IP-Adapter
+
+Transfer style, composition, or character likeness from reference images.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| prompt | string | required | Text prompt for generation |
+| reference_image | string | required | Reference image filename |
+| influence | string | "balanced" | "subtle", "balanced", "strong", "dominant" |
+| transfer_type | string | "style" | "style", "composition", "face" |
+| output_path | string | required | Where to save the result |
+
+### Inpainting & Outpainting
+
+Selectively edit regions of images or extend canvas boundaries.
+
+| Tool | Description |
+|------|-------------|
+| inpaint | Regenerate masked regions (white = regenerate, black = keep) |
+| outpaint | Extend canvas in any direction with AI-generated content |
+| create_mask | Generate masks using AI segmentation or manual regions |
+
+**inpaint parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| prompt | string | required | What to generate in masked region |
+| source_image | string | required | Source image filename |
+| mask_image | string | required | Mask image (white = inpaint) |
+| denoise_strength | number | 0.75 | 0.0 = no change, 1.0 = full regen |
+| output_path | string | required | Where to save result |
+
+**outpaint parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| prompt | string | required | What to generate in extended regions |
+| source_image | string | required | Source image filename |
+| extend_left/right/top/bottom | number | 0 | Pixels to extend |
+| feathering | number | 40 | Edge blending in pixels |
+| output_path | string | required | Where to save result |
+
+**create_mask parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| source_image | string | required | Image to create mask from |
+| preset | string | none | "hands", "face", "eyes", "body", "background", "foreground" |
+| text_prompt | string | none | Custom detection ("red shirt", "the cat") |
+| region | object | none | Manual {x, y, width, height} percentages |
+| expand_pixels | number | 0 | Grow mask outward |
+| feather_pixels | number | 0 | Blur mask edges |
+| invert | bool | false | Swap white/black |
+| output_path | string | required | Where to save mask |
+
+### Text-to-Speech (F5-TTS)
+
+Generate speech with voice cloning from short reference audio.
+
+| Tool | Description |
+|------|-------------|
+| tts_generate | Generate speech from text with cloned voice |
+| list_tts_models | Available TTS models |
+| list_voices | Available voice samples |
+
+**tts_generate parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text | string | required | Text to speak |
+| voice_reference | string | required | Reference audio for voice cloning |
+| voice_reference_text | string | none | Transcript of reference (improves quality) |
+| speed | number | 1.0 | Speech speed (0.5-2.0) |
+| output_path | string | required | Where to save audio |
+
+### Lip-Sync Video
+
+Create talking head videos from portraits and audio.
+
+| Tool | Description |
+|------|-------------|
+| lipsync_generate | Generate lip-synced video from image + audio |
+| talk | Full pipeline: text → TTS → lip-sync → video |
+| list_lipsync_models | Available lip-sync models |
+| list_avatars | Portrait images in input/avatars/ |
+| list_voices_catalog | Voice samples with metadata |
+
+### Portrait Generation
+
+Generate AI portraits optimized for lip-sync and avatar use.
+
+| Tool | Description |
+|------|-------------|
+| create_portrait | Single portrait with style/expression control |
+| batch_create_portraits | Generate multiple portraits in batch |
+
+**Backend options:** `sdxl` (checkpoints), `flux_gguf` (quantized), `flux_fp8` (full precision)
+
+### Health & Diagnostics
+
+| Tool | Description |
+|------|-------------|
+| check_connection | Full health check with GPU info and latency |
+| ping_comfyui | Quick connectivity check |
+
 ## Usage Examples
 
 ### Using Imagine (Recommended)
@@ -356,38 +486,40 @@ The AI suggested "use Playwright locally" for browser automation. That's not rem
 ```
 comfyui-mcp/
 ├── src/
-│   ├── index.ts              # MCP server entry point (15 tools)
+│   ├── index.ts              # MCP server entry point (37 tools)
 │   ├── comfyui-client.ts     # ComfyUI REST/WebSocket client
 │   ├── workflows/
 │   │   ├── txt2img.json      # Text-to-image template
 │   │   ├── img2img.json      # Image-to-image template
 │   │   ├── upscale.json      # Upscaling template
+│   │   ├── inpaint.json      # Inpainting template
+│   │   ├── outpaint.json     # Outpainting template
 │   │   └── builder.ts        # Workflow parameterization & LoRA injection
 │   ├── prompting/            # Smart prompt generation system
 │   │   ├── generator.ts      # Main PromptGenerator class
 │   │   ├── model-detection.ts# Auto-detect model family
-│   │   ├── types.ts          # Type definitions
 │   │   └── strategies/       # Per-model prompting strategies
-│   │       ├── illustrious.ts
-│   │       ├── pony.ts
-│   │       ├── flux.ts
-│   │       ├── sdxl.ts
-│   │       ├── realistic.ts
-│   │       └── sd15.ts
+│   ├── storage/              # Cloud storage abstraction
+│   │   ├── index.ts          # Provider factory
+│   │   └── supabase.ts       # Supabase implementation
 │   └── tools/
 │       ├── imagine.ts        # 🎨 Main generation tool
 │       ├── pipeline.ts       # Multi-step pipeline executor
-│       ├── craft-prompt.ts   # Prompt optimization tool
-│       ├── generate.ts       # generate_image, img2img
-│       ├── upscale.ts        # upscale_image, list_upscale_models
-│       ├── list-models.ts    # Model discovery tools
-│       └── queue-status.ts   # Queue monitoring
-├── docs/
-│   └── UAT.md                # User acceptance testing guide
-├── package.json
-├── tsconfig.json
+│       ├── controlnet.ts     # ControlNet tools
+│       ├── ipadapter.ts      # IP-Adapter style transfer
+│       ├── inpaint.ts        # Inpaint/outpaint/mask tools
+│       ├── tts.ts            # Text-to-speech (F5-TTS)
+│       ├── lipsync.ts        # Lip-sync video generation
+│       ├── avatar.ts         # Portrait generation
+│       └── health.ts         # Connection diagnostics
+├── deploy/                   # RunPod deployment
+│   ├── serverless/           # Serverless handler
+│   ├── terraform/            # Infrastructure as code
+│   └── scripts/              # Deployment utilities
+├── buildlog/                 # Development journal
+├── .github/workflows/        # CI/CD pipelines
 ├── vitest.config.ts          # Test configuration
-├── ARTICLE.md                # Full tutorial article
+├── BUILD_JOURNAL.md          # Feature narratives
 └── README.md
 ```
 
@@ -416,7 +548,7 @@ npm run test:watch
 npm run test:coverage
 ```
 
-**467 tests** covering all tools, prompting strategies, storage providers, and pipeline execution.
+**745 tests** covering all tools, prompting strategies, storage providers, and pipeline execution.
 
 ## Troubleshooting
 
@@ -445,10 +577,10 @@ Verify the LoRA filename with `list_loras`. Ensure strength values are reasonabl
 
 The codebase is designed for extension:
 
-- **ControlNet**: Add conditioning workflows in `src/workflows/` and corresponding tools
-- **Inpainting**: Extend img2img with mask support
-- **Video**: ComfyUI supports AnimateDiff—same workflow pattern applies
+- **Video Generation**: ComfyUI supports AnimateDiff—same workflow pattern applies
 - **Custom nodes**: Any ComfyUI custom node can be integrated into workflow templates
+- **New model families**: Add prompting strategies in `src/prompting/strategies/`
+- **Additional backends**: Extend portrait generation with new model backends
 
 ## Cloud Deployment
 
