@@ -4,6 +4,7 @@ import baseUpscaleWorkflow from "./upscale.json" with { type: "json" };
 import baseControlNetWorkflow from "./controlnet.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
+import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
 
 export interface LoraConfig {
   name: string;
@@ -283,12 +284,14 @@ function addPreprocessorNode(
 
   // Type-specific options
   if (type === "canny") {
-    inputs.low_threshold = options?.lowThreshold ?? 100;
-    inputs.high_threshold = options?.highThreshold ?? 200;
+    // Canny thresholds are 0.01-0.99 range
+    inputs.low_threshold = options?.lowThreshold ?? 0.4;
+    inputs.high_threshold = options?.highThreshold ?? 0.8;
   } else if (type === "openpose") {
-    inputs.detect_body = options?.detectBody ?? true;
-    inputs.detect_face = options?.detectFace ?? true;
-    inputs.detect_hand = options?.detectHands ?? true;
+    // DWPreprocessor expects "enable"/"disable" strings, not booleans
+    inputs.detect_body = (options?.detectBody ?? true) ? "enable" : "disable";
+    inputs.detect_face = (options?.detectFace ?? true) ? "enable" : "disable";
+    inputs.detect_hand = (options?.detectHands ?? true) ? "enable" : "disable";
     inputs.resolution = 512;
   } else if (type === "scribble" || type === "lineart") {
     // AnyLineArtPreprocessor options
@@ -522,6 +525,148 @@ export function buildPreprocessorWorkflow(params: {
       images: [preprocessorNodeId, 0],
     },
   };
+
+  return workflow;
+}
+
+
+// ============================================================================
+// IP-Adapter Support
+// ============================================================================
+
+export type IPAdapterWeightType = "linear" | "ease in" | "ease out" | "ease in-out" | "reverse in-out" | "weak input" | "weak output" | "weak middle" | "strong middle";
+
+export interface IPAdapterParams extends BaseSamplerParams {
+  width?: number;
+  height?: number;
+  referenceImage: string;
+  referenceImages?: string[];
+  ipAdapterModel?: string;
+  clipVisionModel?: string;
+  weight?: number;
+  weightType?: IPAdapterWeightType;
+  startAt?: number;
+  endAt?: number;
+  combineEmbeds?: "concat" | "add" | "subtract" | "average" | "norm average";
+}
+
+/**
+ * Build an IP-Adapter workflow for identity-preserving generation.
+ * IP-Adapter uses reference images to guide generation while maintaining identity.
+ */
+export function buildIPAdapterWorkflow(params: IPAdapterParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseIPAdapterWorkflow));
+
+  // Set checkpoint model
+  workflow["4"].inputs.ckpt_name = params.model;
+
+  // Set positive prompt
+  workflow["6"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set dimensions
+  workflow["5"].inputs.width = params.width || 512;
+  workflow["5"].inputs.height = params.height || 768;
+
+  // Set sampler parameters
+  workflow["3"].inputs.steps = params.steps || 28;
+  workflow["3"].inputs.cfg = params.cfgScale || 7;
+  workflow["3"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["3"].inputs.scheduler = params.scheduler || "normal";
+  workflow["3"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+
+  // Set filename prefix
+  workflow["9"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_ipadapter";
+
+  // Set reference image
+  workflow["10"].inputs.image = params.referenceImage;
+
+  // Set IP-Adapter model
+  workflow["11"].inputs.ipadapter_file = params.ipAdapterModel || "ip-adapter_sdxl_vit-h.safetensors";
+
+  // Set CLIP Vision model
+  workflow["12"].inputs.clip_name = params.clipVisionModel || "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
+
+  // Set IP-Adapter parameters
+  workflow["15"].inputs.weight = params.weight ?? 0.8;
+  workflow["15"].inputs.weight_type = params.weightType || "linear";
+  workflow["15"].inputs.start_at = params.startAt ?? 0.0;
+  workflow["15"].inputs.end_at = params.endAt ?? 1.0;
+
+  // Handle multiple reference images if provided
+  if (params.referenceImages && params.referenceImages.length > 0) {
+    workflow = buildMultiReferenceIPAdapter(workflow, params);
+  }
+
+  // Inject LoRAs if specified (LoRA applies to base model, then IP-Adapter wraps that)
+  if (params.loras && params.loras.length > 0) {
+    // For IP-Adapter, we need to apply LoRAs to the checkpoint output first
+    // Then IP-Adapter wraps the LoRA-modified model
+    workflow = injectLoras(workflow, params.loras, "4", "15", ["6", "7"]);
+    // Update IP-Adapter's model input to point to last LoRA
+    const lastLoraId = `lora_${params.loras.length - 1}`;
+    workflow["15"].inputs.model = [lastLoraId, 0];
+  }
+
+  return workflow;
+}
+
+/**
+ * Internal helper to handle multiple reference images.
+ * Uses IPAdapterBatch or chains multiple IPAdapterApply nodes.
+ */
+function buildMultiReferenceIPAdapter(
+  workflow: Record<string, any>,
+  params: IPAdapterParams
+): Record<string, any> {
+  const allImages = [params.referenceImage, ...(params.referenceImages || [])];
+  
+  if (allImages.length <= 1) {
+    return workflow;
+  }
+
+  // For multiple images, we'll use IPAdapterBatch which can batch multiple images
+  // First, load all images and batch them together
+  
+  // Remove default single image setup
+  delete workflow["10"];
+  
+  // Create image batch node that concatenates all reference images
+  const imageNodes: string[] = [];
+  allImages.forEach((image, index) => {
+    const nodeId = `ref_image_${index}`;
+    workflow[nodeId] = {
+      class_type: "LoadImage",
+      inputs: {
+        image: image,
+      },
+    };
+    imageNodes.push(nodeId);
+  });
+
+  // Create ImageBatch node to combine images
+  let currentBatch = [imageNodes[0], 0];
+  for (let i = 1; i < imageNodes.length; i++) {
+    const batchNodeId = `image_batch_${i}`;
+    workflow[batchNodeId] = {
+      class_type: "ImageBatch",
+      inputs: {
+        image1: currentBatch,
+        image2: [imageNodes[i], 0],
+      },
+    };
+    currentBatch = [batchNodeId, 0];
+  }
+
+  // Update IP-Adapter to use batched images
+  workflow["15"].inputs.image = currentBatch;
+  
+  // Set combine embeds method for multiple images
+  if (params.combineEmbeds) {
+    workflow["15"].inputs.combine_embeds = params.combineEmbeds;
+  }
 
   return workflow;
 }

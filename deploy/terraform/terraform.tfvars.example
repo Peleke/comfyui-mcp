@@ -1,0 +1,23 @@
+# RunPod Serverless Terraform Configuration
+# Copy this file to terraform.tfvars and fill in your values
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   ./setup.sh  # Creates template, outputs template_id
+#   tofu init
+#   tofu apply
+
+# Required: Your RunPod API key
+# Get from: https://www.runpod.io/console/user/settings
+runpod_api_key = "your-runpod-api-key-here"
+
+# Required: Template ID (created by setup.sh or RunPod console)
+template_id = "your-template-id-here"
+
+# Optional: Customize endpoint configuration
+# endpoint_name = "comfyui-talking-heads"
+# gpu_type_ids  = ["NVIDIA RTX 4090", "NVIDIA RTX A6000"]
+# min_workers   = 0
+# max_workers   = 3
+# idle_timeout  = 5
+# execution_timeout_ms = 300000
