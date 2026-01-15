@@ -63,6 +63,10 @@ import {
   checkConnectionSchema,
   pingComfyUI,
 } from "./tools/health.js";
+import {
+  generateWithIPAdapter,
+  generateWithIPAdapterSchema,
+} from "./tools/ipadapter.js";
 
 // Configuration from environment
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
@@ -943,6 +947,97 @@ const TOOLS = [
     },
   },
   // ============================================================================
+  // IP-Adapter Tools
+  // ============================================================================
+  {
+    name: "generate_with_ipadapter",
+    description:
+      "Generate an image with IP-Adapter for identity preservation. Uses reference images to guide generation while maintaining character/style identity. Perfect for consistent character generation across multiple images.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "The positive prompt" },
+        negative_prompt: { type: "string", description: "The negative prompt" },
+        reference_image: {
+          type: "string",
+          description: "Filename of reference image in ComfyUI input folder for identity preservation",
+        },
+        reference_images: {
+          type: "array",
+          items: { type: "string" },
+          description: "Additional reference images for multi-reference generation",
+        },
+        weight: {
+          type: "number",
+          description: "IP-Adapter weight/strength (0.0-2.0, default 0.8)",
+          default: 0.8,
+        },
+        weight_type: {
+          type: "string",
+          enum: [
+            "linear",
+            "ease in",
+            "ease out",
+            "ease in-out",
+            "reverse in-out",
+            "weak input",
+            "weak output",
+            "weak middle",
+            "strong middle",
+          ],
+          description: "Weight application curve (default: linear)",
+        },
+        start_at: {
+          type: "number",
+          description: "When to start applying IP-Adapter (0.0-1.0, default: 0)",
+        },
+        end_at: {
+          type: "number",
+          description: "When to stop applying IP-Adapter (0.0-1.0, default: 1)",
+        },
+        combine_embeds: {
+          type: "string",
+          enum: ["concat", "add", "subtract", "average", "norm average"],
+          description: "How to combine multiple reference image embeddings",
+        },
+        ipadapter_model: {
+          type: "string",
+          description: "IP-Adapter model file (auto-detected if not specified)",
+        },
+        clip_vision_model: {
+          type: "string",
+          description: "CLIP Vision model for encoding reference images",
+        },
+        model: { type: "string", description: "Checkpoint model" },
+        width: { type: "number", default: 512 },
+        height: { type: "number", default: 768 },
+        steps: { type: "number", default: 28 },
+        cfg_scale: { type: "number", default: 7 },
+        sampler: { type: "string", default: "euler_ancestral" },
+        scheduler: { type: "string", default: "normal" },
+        seed: { type: "number" },
+        loras: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              strength_model: { type: "number" },
+              strength_clip: { type: "number" },
+            },
+            required: ["name"],
+          },
+        },
+        output_path: { type: "string", description: "Full path to save output" },
+        upload_to_cloud: {
+          type: "boolean",
+          description: "Upload result to cloud storage (default: true)",
+        },
+      },
+      required: ["prompt", "reference_image", "output_path"],
+    },
+  },
+  // ============================================================================
   // TTS Tools
   // ============================================================================
   {
@@ -1682,6 +1777,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const models = await listControlNetModels(client);
         return {
           content: [{ type: "text", text: JSON.stringify(models, null, 2) }],
+        };
+      }
+
+      // ====== IP-Adapter Tools ======
+      case "generate_with_ipadapter": {
+        const input = generateWithIPAdapterSchema.parse({
+          prompt: args?.prompt,
+          negative_prompt: args?.negative_prompt,
+          reference_image: args?.reference_image,
+          reference_images: args?.reference_images,
+          weight: args?.weight,
+          weight_type: args?.weight_type,
+          start_at: args?.start_at,
+          end_at: args?.end_at,
+          combine_embeds: args?.combine_embeds,
+          ipadapter_model: args?.ipadapter_model,
+          clip_vision_model: args?.clip_vision_model,
+          model: args?.model,
+          width: args?.width ?? 512,
+          height: args?.height ?? 768,
+          steps: args?.steps ?? 28,
+          cfg_scale: args?.cfg_scale ?? 7,
+          sampler: args?.sampler ?? "euler_ancestral",
+          scheduler: args?.scheduler ?? "normal",
+          seed: args?.seed,
+          loras: args?.loras,
+          output_path: args?.output_path,
+          upload_to_cloud: args?.upload_to_cloud,
+        });
+
+        const result = await generateWithIPAdapter(client, input, COMFYUI_MODEL);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
       }
 
