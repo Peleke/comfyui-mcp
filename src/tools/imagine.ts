@@ -10,6 +10,7 @@ import {
   isCloudStorageConfigured,
   generateRemotePath,
 } from "../storage/index.js";
+import { architectures } from "../architectures/index.js";
 
 // Schema for LoRA configuration
 const loraSchema = z.object({
@@ -325,13 +326,17 @@ export async function imagine(
   const qualitySettings = applyQualityPreset(input, modelFamily);
 
   // Merge settings (user overrides > quality preset > model defaults)
+  // Get architecture defaults for this model (used as final fallback)
+  const archDefaults = architectures.getDefaults(model);
+
+  // Merge settings: user overrides > quality preset > prompting strategy > architecture defaults
   const finalSettings = {
-    width: input.width ?? generatedPrompt.recommendedSettings.width ?? 1024,
-    height: input.height ?? generatedPrompt.recommendedSettings.height ?? 1024,
+    width: input.width ?? generatedPrompt.recommendedSettings.width ?? archDefaults.width,
+    height: input.height ?? generatedPrompt.recommendedSettings.height ?? archDefaults.height,
     steps: qualitySettings.steps,
-    cfgScale: input.cfg_scale ?? generatedPrompt.recommendedSettings.cfgScale ?? 7,
-    sampler: input.sampler ?? generatedPrompt.recommendedSettings.sampler ?? "euler_ancestral",
-    scheduler: input.scheduler ?? generatedPrompt.recommendedSettings.scheduler ?? "normal",
+    cfgScale: input.cfg_scale ?? generatedPrompt.recommendedSettings.cfgScale ?? archDefaults.cfgScale,
+    sampler: input.sampler ?? generatedPrompt.recommendedSettings.sampler ?? archDefaults.sampler,
+    scheduler: input.scheduler ?? generatedPrompt.recommendedSettings.scheduler ?? archDefaults.scheduler,
   };
 
   // Prepare LoRAs
