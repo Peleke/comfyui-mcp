@@ -2,11 +2,10 @@ import baseTxt2ImgWorkflow from "./txt2img.json" with { type: "json" };
 import baseImg2ImgWorkflow from "./img2img.json" with { type: "json" };
 import baseUpscaleWorkflow from "./upscale.json" with { type: "json" };
 import baseControlNetWorkflow from "./controlnet.json" with { type: "json" };
+import baseInpaintWorkflow from "./inpaint.json" with { type: "json" };
+import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
-import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
-import baseInpaintWorkflow from "./inpaint.json" with { type: "json" };
-import baseOutpaintWorkflow from "./outpaint.json" with { type: "json" };
 
 export interface LoraConfig {
   name: string;
@@ -43,6 +42,58 @@ export interface UpscaleParams {
   targetWidth?: number;
   targetHeight?: number;
   filenamePrefix?: string;
+}
+
+export interface InpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  maskImage: string;
+  denoise?: number;
+  growMaskBy?: number;
+}
+
+export interface OutpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  extendLeft?: number;
+  extendRight?: number;
+  extendTop?: number;
+  extendBottom?: number;
+  feathering?: number;
+  denoise?: number;
+}
+
+export type IPAdapterWeightType =
+  | "linear"
+  | "ease in"
+  | "ease out"
+  | "ease in-out"
+  | "reverse in-out"
+  | "weak input"
+  | "weak output"
+  | "weak middle"
+  | "strong middle"
+  | "style transfer"
+  | "composition"
+  | "strong style transfer";
+
+export type IPAdapterCombineEmbeds =
+  | "concat"
+  | "add"
+  | "subtract"
+  | "average"
+  | "norm average";
+
+export interface IPAdapterParams extends BaseSamplerParams {
+  width?: number;
+  height?: number;
+  referenceImage: string;
+  referenceImages?: string[]; // For multi-reference
+  weight?: number;
+  weightType?: IPAdapterWeightType;
+  startAt?: number;
+  endAt?: number;
+  combineEmbeds?: IPAdapterCombineEmbeds;
+  ipadapterModel?: string;
+  clipVisionModel?: string;
 }
 
 /**
@@ -161,6 +212,287 @@ export function buildImg2ImgWorkflow(params: Img2ImgParams): Record<string, any>
   // Inject LoRAs if specified
   if (params.loras && params.loras.length > 0) {
     workflow = injectLoras(workflow, params.loras, "4", "3", ["6", "7"]);
+  }
+
+  return workflow;
+}
+
+export function buildInpaintWorkflow(params: InpaintParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseInpaintWorkflow));
+
+  // Set source image
+  workflow["1"].inputs.image = params.sourceImage;
+
+  // Set mask image
+  workflow["2"].inputs.image = params.maskImage;
+
+  // Set checkpoint model
+  workflow["4"].inputs.ckpt_name = params.model;
+
+  // Set positive prompt
+  workflow["6"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set inpaint parameters
+  workflow["3"].inputs.grow_mask_by = params.growMaskBy ?? 6;
+
+  // Set sampler parameters
+  workflow["5"].inputs.steps = params.steps || 28;
+  workflow["5"].inputs.cfg = params.cfgScale || 7;
+  workflow["5"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["5"].inputs.scheduler = params.scheduler || "normal";
+  workflow["5"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+  workflow["5"].inputs.denoise = params.denoise ?? 0.75;
+
+  // Set filename prefix
+  workflow["9"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_inpaint";
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    workflow = injectLoras(workflow, params.loras, "4", "5", ["6", "7"]);
+  }
+
+  return workflow;
+}
+
+export function buildOutpaintWorkflow(params: OutpaintParams): Record<string, any> {
+  // Outpainting extends the canvas, then inpaints the new areas
+  // Uses ImagePadForOutpaint to create the extended canvas and mask
+
+  const workflow: Record<string, any> = {};
+
+  // Load source image
+  workflow["1"] = {
+    class_type: "LoadImage",
+    inputs: {
+      image: params.sourceImage,
+    },
+  };
+
+  // Pad image for outpainting (creates extended canvas + mask)
+  workflow["2"] = {
+    class_type: "ImagePadForOutpaint",
+    inputs: {
+      image: ["1", 0],
+      left: params.extendLeft ?? 0,
+      right: params.extendRight ?? 0,
+      top: params.extendTop ?? 0,
+      bottom: params.extendBottom ?? 0,
+      feathering: params.feathering ?? 40,
+    },
+  };
+
+  // Load checkpoint
+  workflow["3"] = {
+    class_type: "CheckpointLoaderSimple",
+    inputs: {
+      ckpt_name: params.model,
+    },
+  };
+
+  // Encode for inpainting with the generated mask
+  workflow["4"] = {
+    class_type: "VAEEncodeForInpaint",
+    inputs: {
+      pixels: ["2", 0],
+      vae: ["3", 2],
+      mask: ["2", 1],
+      grow_mask_by: 8,
+    },
+  };
+
+  // Positive prompt
+  workflow["5"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 1],
+      text: params.prompt,
+    },
+  };
+
+  // Negative prompt
+  workflow["6"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 1],
+      text: params.negativePrompt || "bad quality, blurry, ugly, deformed",
+    },
+  };
+
+  // KSampler
+  workflow["7"] = {
+    class_type: "KSampler",
+    inputs: {
+      model: ["3", 0],
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["4", 0],
+      seed: params.seed ?? Math.floor(Math.random() * 2147483647),
+      steps: params.steps || 28,
+      cfg: params.cfgScale || 7,
+      sampler_name: params.sampler || "euler_ancestral",
+      scheduler: params.scheduler || "normal",
+      denoise: params.denoise ?? 0.8,
+    },
+  };
+
+  // VAE Decode
+  workflow["8"] = {
+    class_type: "VAEDecode",
+    inputs: {
+      samples: ["7", 0],
+      vae: ["3", 2],
+    },
+  };
+
+  // Save image
+  workflow["9"] = {
+    class_type: "SaveImage",
+    inputs: {
+      images: ["8", 0],
+      filename_prefix: params.filenamePrefix || "ComfyUI_MCP_outpaint",
+    },
+  };
+
+  return workflow;
+}
+
+/**
+ * Build an IP-Adapter workflow for identity preservation
+ *
+ * IP-Adapter allows using reference images to guide generation,
+ * preserving character identity, style, or composition.
+ */
+export function buildIPAdapterWorkflow(params: IPAdapterParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseIPAdapterWorkflow));
+
+  // Set checkpoint model
+  workflow["1"].inputs.ckpt_name = params.model;
+
+  // Set CLIP Vision model (for image embedding)
+  if (params.clipVisionModel) {
+    workflow["2"].inputs.clip_name = params.clipVisionModel;
+  }
+
+  // Set IP-Adapter model
+  if (params.ipadapterModel) {
+    workflow["3"].inputs.ipadapter_file = params.ipadapterModel;
+  }
+
+  // Set reference image
+  workflow["4"].inputs.image = params.referenceImage;
+
+  // Set IP-Adapter parameters
+  workflow["5"].inputs.weight = params.weight ?? 0.8;
+  workflow["5"].inputs.weight_type = params.weightType ?? "linear";
+  workflow["5"].inputs.start_at = params.startAt ?? 0.0;
+  workflow["5"].inputs.end_at = params.endAt ?? 1.0;
+  workflow["5"].inputs.combine_embeds = params.combineEmbeds ?? "concat";
+
+  // Set dimensions
+  workflow["6"].inputs.width = params.width || 512;
+  workflow["6"].inputs.height = params.height || 768;
+
+  // Set positive prompt
+  workflow["7"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["8"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set sampler parameters
+  workflow["9"].inputs.steps = params.steps || 28;
+  workflow["9"].inputs.cfg = params.cfgScale || 7;
+  workflow["9"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["9"].inputs.scheduler = params.scheduler || "normal";
+  workflow["9"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+
+  // Set filename prefix
+  workflow["11"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_ipadapter";
+
+  // Handle multiple reference images if provided
+  if (params.referenceImages && params.referenceImages.length > 0) {
+    // Add additional reference images and create IPAdapterBatch or chain
+    const allImages = [params.referenceImage, ...params.referenceImages];
+
+    // Remove the single image loader
+    delete workflow["4"];
+
+    // Track current model source for chaining
+    let currentModelSource: [string, number] = ["1", 0];
+
+    allImages.forEach((image, index) => {
+      const imageNodeId = `ref_image_${index}`;
+      const ipadapterNodeId = `ipadapter_apply_${index}`;
+
+      // Load reference image
+      workflow[imageNodeId] = {
+        class_type: "LoadImage",
+        inputs: {
+          image,
+        },
+      };
+
+      // Apply IP-Adapter for this image
+      workflow[ipadapterNodeId] = {
+        class_type: "IPAdapterAdvanced",
+        inputs: {
+          model: currentModelSource,
+          ipadapter: ["3", 0],
+          clip_vision: ["2", 0],
+          image: [imageNodeId, 0],
+          weight: (params.weight ?? 0.8) / allImages.length, // Distribute weight
+          weight_type: params.weightType ?? "linear",
+          start_at: params.startAt ?? 0.0,
+          end_at: params.endAt ?? 1.0,
+          combine_embeds: params.combineEmbeds ?? "concat",
+        },
+      };
+
+      // Update model source for next iteration
+      currentModelSource = [ipadapterNodeId, 0];
+    });
+
+    // Wire final IP-Adapter output to KSampler
+    workflow["9"].inputs.model = currentModelSource;
+
+    // Remove the default IP-Adapter apply node
+    delete workflow["5"];
+  }
+
+  // Inject LoRAs if specified (after IP-Adapter in the chain)
+  if (params.loras && params.loras.length > 0) {
+    // Get current model source (either from IP-Adapter chain or default)
+    const modelSource = params.referenceImages && params.referenceImages.length > 0
+      ? workflow["9"].inputs.model
+      : ["5", 0];
+
+    let currentModelSource: [string, number] = modelSource;
+    let currentClipSource: [string, number] = ["1", 1];
+
+    params.loras.forEach((lora, index) => {
+      const loraNodeId = `lora_${index}`;
+
+      workflow[loraNodeId] = {
+        class_type: "LoraLoader",
+        inputs: {
+          lora_name: lora.name,
+          strength_model: lora.strength_model ?? 1.0,
+          strength_clip: lora.strength_clip ?? 1.0,
+          model: currentModelSource,
+          clip: currentClipSource,
+        },
+      };
+
+      currentModelSource = [loraNodeId, 0];
+      currentClipSource = [loraNodeId, 1];
+    });
+
+    // Wire to KSampler and text encoders
+    workflow["9"].inputs.model = currentModelSource;
+    workflow["7"].inputs.clip = currentClipSource;
+    workflow["8"].inputs.clip = currentClipSource;
   }
 
   return workflow;
@@ -528,256 +860,6 @@ export function buildPreprocessorWorkflow(params: {
       images: [preprocessorNodeId, 0],
     },
   };
-
-  return workflow;
-}
-
-
-// ============================================================================
-// IP-Adapter Support
-// ============================================================================
-
-export type IPAdapterWeightType = "linear" | "ease in" | "ease out" | "ease in-out" | "reverse in-out" | "weak input" | "weak output" | "weak middle" | "strong middle";
-
-export interface IPAdapterParams extends BaseSamplerParams {
-  width?: number;
-  height?: number;
-  referenceImage: string;
-  referenceImages?: string[];
-  ipAdapterModel?: string;
-  clipVisionModel?: string;
-  weight?: number;
-  weightType?: IPAdapterWeightType;
-  startAt?: number;
-  endAt?: number;
-  combineEmbeds?: "concat" | "add" | "subtract" | "average" | "norm average";
-}
-
-/**
- * Build an IP-Adapter workflow for identity-preserving generation.
- * IP-Adapter uses reference images to guide generation while maintaining identity.
- */
-export function buildIPAdapterWorkflow(params: IPAdapterParams): Record<string, any> {
-  let workflow = JSON.parse(JSON.stringify(baseIPAdapterWorkflow));
-
-  // Set checkpoint model
-  workflow["4"].inputs.ckpt_name = params.model;
-
-  // Set positive prompt
-  workflow["6"].inputs.text = params.prompt;
-
-  // Set negative prompt
-  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
-
-  // Set dimensions
-  workflow["5"].inputs.width = params.width || 512;
-  workflow["5"].inputs.height = params.height || 768;
-
-  // Set sampler parameters
-  workflow["3"].inputs.steps = params.steps || 28;
-  workflow["3"].inputs.cfg = params.cfgScale || 7;
-  workflow["3"].inputs.sampler_name = params.sampler || "euler_ancestral";
-  workflow["3"].inputs.scheduler = params.scheduler || "normal";
-  workflow["3"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
-
-  // Set filename prefix
-  workflow["9"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_ipadapter";
-
-  // Set reference image
-  workflow["10"].inputs.image = params.referenceImage;
-
-  // Set IP-Adapter model
-  workflow["11"].inputs.ipadapter_file = params.ipAdapterModel || "ip-adapter_sdxl_vit-h.safetensors";
-
-  // Set CLIP Vision model
-  workflow["12"].inputs.clip_name = params.clipVisionModel || "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
-
-  // Set IP-Adapter parameters
-  workflow["15"].inputs.weight = params.weight ?? 0.8;
-  workflow["15"].inputs.weight_type = params.weightType || "linear";
-  workflow["15"].inputs.start_at = params.startAt ?? 0.0;
-  workflow["15"].inputs.end_at = params.endAt ?? 1.0;
-
-  // Handle multiple reference images if provided
-  if (params.referenceImages && params.referenceImages.length > 0) {
-    workflow = buildMultiReferenceIPAdapter(workflow, params);
-  }
-
-  // Inject LoRAs if specified (LoRA applies to base model, then IP-Adapter wraps that)
-  if (params.loras && params.loras.length > 0) {
-    // For IP-Adapter, we need to apply LoRAs to the checkpoint output first
-    // Then IP-Adapter wraps the LoRA-modified model
-    workflow = injectLoras(workflow, params.loras, "4", "15", ["6", "7"]);
-    // Update IP-Adapter's model input to point to last LoRA
-    const lastLoraId = `lora_${params.loras.length - 1}`;
-    workflow["15"].inputs.model = [lastLoraId, 0];
-  }
-
-  return workflow;
-}
-
-/**
- * Internal helper to handle multiple reference images.
- * Uses IPAdapterBatch or chains multiple IPAdapterApply nodes.
- */
-function buildMultiReferenceIPAdapter(
-  workflow: Record<string, any>,
-  params: IPAdapterParams
-): Record<string, any> {
-  const allImages = [params.referenceImage, ...(params.referenceImages || [])];
-  
-  if (allImages.length <= 1) {
-    return workflow;
-  }
-
-  // For multiple images, we'll use IPAdapterBatch which can batch multiple images
-  // First, load all images and batch them together
-  
-  // Remove default single image setup
-  delete workflow["10"];
-  
-  // Create image batch node that concatenates all reference images
-  const imageNodes: string[] = [];
-  allImages.forEach((image, index) => {
-    const nodeId = `ref_image_${index}`;
-    workflow[nodeId] = {
-      class_type: "LoadImage",
-      inputs: {
-        image: image,
-      },
-    };
-    imageNodes.push(nodeId);
-  });
-
-  // Create ImageBatch node to combine images
-  let currentBatch = [imageNodes[0], 0];
-  for (let i = 1; i < imageNodes.length; i++) {
-    const batchNodeId = `image_batch_${i}`;
-    workflow[batchNodeId] = {
-      class_type: "ImageBatch",
-      inputs: {
-        image1: currentBatch,
-        image2: [imageNodes[i], 0],
-      },
-    };
-    currentBatch = [batchNodeId, 0];
-  }
-
-  // Update IP-Adapter to use batched images
-  workflow["15"].inputs.image = currentBatch;
-  
-  // Set combine embeds method for multiple images
-  if (params.combineEmbeds) {
-    workflow["15"].inputs.combine_embeds = params.combineEmbeds;
-  }
-
-  return workflow;
-}
-
-// ============================================================================
-// Inpainting / Outpainting Support
-// ============================================================================
-
-export interface InpaintParams extends BaseSamplerParams {
-  sourceImage: string;
-  maskImage: string;
-  denoiseStrength?: number;
-}
-
-export interface OutpaintParams extends BaseSamplerParams {
-  sourceImage: string;
-  extendLeft?: number;
-  extendRight?: number;
-  extendTop?: number;
-  extendBottom?: number;
-  feathering?: number;
-  denoiseStrength?: number;
-}
-
-/**
- * Build an inpainting workflow.
- * Uses a mask image to selectively regenerate parts of an image.
- * White areas in the mask = inpaint, black areas = keep original.
- */
-export function buildInpaintWorkflow(params: InpaintParams): Record<string, any> {
-  let workflow = JSON.parse(JSON.stringify(baseInpaintWorkflow));
-
-  // Set source image
-  workflow["1"].inputs.image = params.sourceImage;
-
-  // Set mask image
-  workflow["2"].inputs.image = params.maskImage;
-
-  // Set checkpoint model
-  workflow["3"].inputs.ckpt_name = params.model;
-
-  // Set positive prompt
-  workflow["6"].inputs.text = params.prompt;
-
-  // Set negative prompt
-  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
-
-  // Set sampler parameters
-  workflow["8"].inputs.steps = params.steps || 28;
-  workflow["8"].inputs.cfg = params.cfgScale || 7;
-  workflow["8"].inputs.sampler_name = params.sampler || "euler_ancestral";
-  workflow["8"].inputs.scheduler = params.scheduler || "normal";
-  workflow["8"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
-  workflow["8"].inputs.denoise = params.denoiseStrength ?? 0.75;
-
-  // Set filename prefix
-  workflow["10"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_inpaint";
-
-  // Inject LoRAs if specified
-  if (params.loras && params.loras.length > 0) {
-    workflow = injectLoras(workflow, params.loras, "3", "8", ["6", "7"]);
-  }
-
-  return workflow;
-}
-
-/**
- * Build an outpainting workflow.
- * Extends the canvas and generates content in the new areas.
- * Uses ImagePadForOutpaint which handles padding + mask generation.
- */
-export function buildOutpaintWorkflow(params: OutpaintParams): Record<string, any> {
-  let workflow = JSON.parse(JSON.stringify(baseOutpaintWorkflow));
-
-  // Set source image
-  workflow["1"].inputs.image = params.sourceImage;
-
-  // Set padding amounts
-  workflow["2"].inputs.left = params.extendLeft ?? 0;
-  workflow["2"].inputs.right = params.extendRight ?? 0;
-  workflow["2"].inputs.top = params.extendTop ?? 0;
-  workflow["2"].inputs.bottom = params.extendBottom ?? 0;
-  workflow["2"].inputs.feathering = params.feathering ?? 40;
-
-  // Set checkpoint model
-  workflow["3"].inputs.ckpt_name = params.model;
-
-  // Set positive prompt
-  workflow["6"].inputs.text = params.prompt;
-
-  // Set negative prompt
-  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
-
-  // Set sampler parameters
-  workflow["8"].inputs.steps = params.steps || 28;
-  workflow["8"].inputs.cfg = params.cfgScale || 7;
-  workflow["8"].inputs.sampler_name = params.sampler || "euler_ancestral";
-  workflow["8"].inputs.scheduler = params.scheduler || "normal";
-  workflow["8"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
-  workflow["8"].inputs.denoise = params.denoiseStrength ?? 0.8; // Higher for outpaint
-
-  // Set filename prefix
-  workflow["10"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_outpaint";
-
-  // Inject LoRAs if specified
-  if (params.loras && params.loras.length > 0) {
-    workflow = injectLoras(workflow, params.loras, "3", "8", ["6", "7"]);
-  }
 
   return workflow;
 }

@@ -1,91 +1,91 @@
 {
-  "3": {
-    "class_type": "KSampler",
-    "inputs": {
-      "cfg": 7,
-      "denoise": 1,
-      "latent_image": ["5", 0],
-      "model": ["15", 0],
-      "negative": ["7", 0],
-      "positive": ["6", 0],
-      "sampler_name": "euler_ancestral",
-      "scheduler": "normal",
-      "seed": 0,
-      "steps": 28
-    }
-  },
-  "4": {
+  "1": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
       "ckpt_name": "model.safetensors"
     }
   },
-  "5": {
-    "class_type": "EmptyLatentImage",
-    "inputs": {
-      "batch_size": 1,
-      "height": 768,
-      "width": 512
-    }
-  },
-  "6": {
-    "class_type": "CLIPTextEncode",
-    "inputs": {
-      "clip": ["4", 1],
-      "text": "a beautiful portrait"
-    }
-  },
-  "7": {
-    "class_type": "CLIPTextEncode",
-    "inputs": {
-      "clip": ["4", 1],
-      "text": "bad quality, blurry"
-    }
-  },
-  "8": {
-    "class_type": "VAEDecode",
-    "inputs": {
-      "samples": ["3", 0],
-      "vae": ["4", 2]
-    }
-  },
-  "9": {
-    "class_type": "SaveImage",
-    "inputs": {
-      "filename_prefix": "ComfyUI_MCP_ipadapter",
-      "images": ["8", 0]
-    }
-  },
-  "10": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "reference_image.png"
-    }
-  },
-  "11": {
-    "class_type": "IPAdapterModelLoader",
-    "inputs": {
-      "ipadapter_file": "ip-adapter_sdxl_vit-h.safetensors"
-    }
-  },
-  "12": {
+  "2": {
     "class_type": "CLIPVisionLoader",
     "inputs": {
       "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
     }
   },
-  "15": {
-    "class_type": "IPAdapterApply",
+  "3": {
+    "class_type": "IPAdapterModelLoader",
     "inputs": {
-      "model": ["4", 0],
-      "ipadapter": ["11", 0],
-      "clip_vision": ["12", 0],
-      "image": ["10", 0],
+      "ipadapter_file": "ip-adapter-plus_sd15.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    }
+  },
+  "5": {
+    "class_type": "IPAdapterAdvanced",
+    "inputs": {
+      "model": ["1", 0],
+      "ipadapter": ["3", 0],
+      "clip_vision": ["2", 0],
+      "image": ["4", 0],
       "weight": 0.8,
       "weight_type": "linear",
       "start_at": 0.0,
       "end_at": 1.0,
-      "unfold_batch": false
+      "combine_embeds": "concat"
+    }
+  },
+  "6": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 512,
+      "height": 768,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "a beautiful image"
+    }
+  },
+  "8": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "bad quality, blurry"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["5", 0],
+      "positive": ["7", 0],
+      "negative": ["8", 0],
+      "latent_image": ["6", 0],
+      "seed": 0,
+      "steps": 28,
+      "cfg": 7,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": 1.0
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["9", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI_MCP_ipadapter",
+      "images": ["10", 0]
     }
   }
 }

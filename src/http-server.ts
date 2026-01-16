@@ -17,6 +17,25 @@ import { ttsGenerate, ttsGenerateSchema } from "./tools/tts.js";
 import { lipSyncGenerate, lipSyncGenerateSchema } from "./tools/lipsync.js";
 import { imagine, imagineSchema } from "./tools/imagine.js";
 import { generateImage, generateImageSchema } from "./tools/generate.js";
+import { upscaleImage, upscaleSchema } from "./tools/upscale.js";
+import {
+  generateWithControlNet,
+  generateWithControlNetSchema,
+  generateWithMultiControlNet,
+  generateWithMultiControlNetSchema,
+  preprocessControlImage,
+  preprocessControlImageSchema,
+} from "./tools/controlnet.js";
+import {
+  inpaint,
+  inpaintSchema,
+  outpaint,
+  outpaintSchema,
+} from "./tools/inpaint.js";
+import {
+  ipadapter,
+  ipadapterSchema,
+} from "./tools/ipadapter.js";
 import { checkConnection, pingComfyUI } from "./tools/health.js";
 import { listModels } from "./tools/list-models.js";
 import { mkdir } from "fs/promises";
@@ -96,6 +115,13 @@ app.use("/lipsync", authMiddleware);
 app.use("/lipsync/async", authMiddleware);
 app.use("/imagine", authMiddleware);
 app.use("/image", authMiddleware);
+app.use("/upscale", authMiddleware);
+app.use("/controlnet", authMiddleware);
+app.use("/controlnet/*", authMiddleware);
+app.use("/preprocess/*", authMiddleware);
+app.use("/inpaint", authMiddleware);
+app.use("/outpaint", authMiddleware);
+app.use("/ipadapter", authMiddleware);
 
 // ============================================================================
 // Health Endpoints
@@ -362,6 +388,404 @@ app.post("/image", async (c) => {
   }
 });
 
+/**
+ * POST /upscale - Upscale an image using AI upscaling models
+ */
+app.post("/upscale", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.input_image) {
+      return c.json({ error: "input_image is required" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `upscale_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = upscaleSchema.parse({
+      input_image: body.input_image,
+      upscale_model: body.upscale_model ?? "RealESRGAN_x4plus.pth",
+      target_width: body.target_width,
+      target_height: body.target_height,
+      output_path: outputPath,
+    });
+
+    const result = await upscaleImage(client, input);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("Upscale failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "Upscale failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /controlnet - Single ControlNet generation
+ */
+app.post("/controlnet", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.control_image) {
+      return c.json({ error: "control_image is required" }, 400);
+    }
+    if (!body.control_type) {
+      return c.json({ error: "control_type is required" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `controlnet_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = generateWithControlNetSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await generateWithControlNet(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      controlType: result.control_type,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("ControlNet generation failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "ControlNet generation failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /controlnet/multi - Multi-ControlNet stacking (1-5 conditions)
+ */
+app.post("/controlnet/multi", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.controls || !Array.isArray(body.controls) || body.controls.length === 0) {
+      return c.json({ error: "controls array is required (1-5 conditions)" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `controlnet_multi_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = generateWithMultiControlNetSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await generateWithMultiControlNet(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      controlTypes: result.control_types,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("Multi-ControlNet generation failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "Multi-ControlNet generation failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /preprocess/:type - Control image preprocessing
+ */
+app.post("/preprocess/:type", async (c) => {
+  try {
+    const controlType = c.req.param("type");
+    const body = await c.req.json();
+
+    if (!body.input_image) {
+      return c.json({ error: "input_image is required" }, 400);
+    }
+
+    const validTypes = ["canny", "depth", "openpose", "scribble", "lineart", "semantic_seg"];
+    if (!validTypes.includes(controlType)) {
+      return c.json({
+        error: `Invalid control type. Must be one of: ${validTypes.join(", ")}`,
+      }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `preprocess_${controlType}_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = preprocessControlImageSchema.parse({
+      input_image: body.input_image,
+      control_type: controlType,
+      preprocessor_options: body.preprocessor_options,
+      output_path: outputPath,
+    });
+
+    const result = await preprocessControlImage(client, input);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("Preprocess failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "Preprocess failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /inpaint - Inpaint an image using a mask
+ */
+app.post("/inpaint", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.source_image) {
+      return c.json({ error: "source_image is required" }, 400);
+    }
+    if (!body.mask_image) {
+      return c.json({ error: "mask_image is required" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `inpaint_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = inpaintSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await inpaint(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("Inpaint failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "Inpaint failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /outpaint - Extend an image canvas
+ */
+app.post("/outpaint", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.source_image) {
+      return c.json({ error: "source_image is required" }, 400);
+    }
+
+    // Check at least one extend direction is specified
+    const totalExtend =
+      (body.extend_left ?? 0) +
+      (body.extend_right ?? 0) +
+      (body.extend_top ?? 0) +
+      (body.extend_bottom ?? 0);
+
+    if (totalExtend === 0) {
+      return c.json({
+        error: "At least one extend direction must be specified (extend_left, extend_right, extend_top, extend_bottom)",
+      }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `outpaint_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = outpaintSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await outpaint(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("Outpaint failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "Outpaint failed",
+    }, 500);
+  }
+});
+
+/**
+ * POST /ipadapter - Generate with IP-Adapter for identity preservation
+ */
+app.post("/ipadapter", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.reference_image) {
+      return c.json({ error: "reference_image is required" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `ipadapter_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = ipadapterSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await ipadapter(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      referenceCount: result.referenceCount,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("IP-Adapter generation failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "IP-Adapter generation failed",
+    }, 500);
+  }
+});
+
 // ============================================================================
 // Async Queue Endpoints
 // ============================================================================
@@ -591,6 +1015,13 @@ app.get("/", (c) => {
       "POST /lipsync/async": "Queue lipsync generation (auth required)",
       "POST /imagine": "High-level image generation (auth required)",
       "POST /image": "Direct image generation (auth required)",
+      "POST /upscale": "AI image upscaling (auth required)",
+      "POST /controlnet": "Single ControlNet generation (auth required)",
+      "POST /controlnet/multi": "Multi-ControlNet stacking (auth required)",
+      "POST /preprocess/:type": "Control image preprocessing (auth required)",
+      "POST /inpaint": "Inpaint image regions with mask (auth required)",
+      "POST /outpaint": "Extend image canvas (auth required)",
+      "POST /ipadapter": "Identity preservation with IP-Adapter (auth required)",
     },
     async: {
       enabled: ASYNC_MODE,
