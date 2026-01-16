@@ -11,23 +11,47 @@ import {
 } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
 import { dirname } from "path";
+import { architectures, type ControlNetType as ArchControlNetType } from "../architectures/index.js";
 
 // ============================================================================
-// ControlNet Model Mappings
+// ControlNet Model Selection (Architecture-Aware)
 // ============================================================================
 
 /**
- * Default ControlNet models for each type (SD1.5)
+ * Get the appropriate ControlNet model for a checkpoint and control type.
+ *
+ * This function uses the architecture registry to detect the checkpoint's
+ * architecture (SD1.5, SDXL, Pony, etc.) and return the correct ControlNet model.
+ *
+ * @param checkpointName - The checkpoint filename
+ * @param controlType - The type of ControlNet (canny, depth, etc.)
+ * @returns The ControlNet model filename
  */
-const DEFAULT_CONTROLNET_MODELS: Record<ControlNetType, string> = {
-  canny: "control_v11p_sd15_canny_fp16.safetensors",
-  depth: "control_v11f1p_sd15_depth_fp16.safetensors",
-  openpose: "control_v11p_sd15_openpose_fp16.safetensors",
-  qrcode: "control_v1p_sd15_qrcode.safetensors",
-  scribble: "control_v11p_sd15_scribble_fp16.safetensors",
-  lineart: "control_v11p_sd15_lineart_fp16.safetensors",
-  semantic_seg: "control_v11p_sd15_seg_fp16.safetensors",
-};
+function getControlNetModel(checkpointName: string, controlType: ControlNetType): string {
+  // Use architecture registry to get the correct model
+  const model = architectures.getControlNetModel(
+    checkpointName,
+    controlType as ArchControlNetType
+  );
+
+  if (model) {
+    return model;
+  }
+
+  // Fallback to SD1.5 models if architecture doesn't support ControlNet
+  // This shouldn't happen in practice since we register all common architectures
+  const sd15Fallback: Record<ControlNetType, string> = {
+    canny: "control_v11p_sd15_canny_fp16.safetensors",
+    depth: "control_v11f1p_sd15_depth_fp16.safetensors",
+    openpose: "control_v11p_sd15_openpose_fp16.safetensors",
+    qrcode: "control_v1p_sd15_qrcode.safetensors",
+    scribble: "control_v11p_sd15_scribble_fp16.safetensors",
+    lineart: "control_v11p_sd15_lineart_fp16.safetensors",
+    semantic_seg: "control_v11p_sd15_seg_fp16.safetensors",
+  };
+
+  return sd15Fallback[controlType];
+}
 
 /**
  * Default strength for each control type
@@ -277,7 +301,8 @@ export async function generateWithControlNet(
 
   const seed = input.seed ?? Math.floor(Math.random() * 2147483647);
   const controlType = input.control_type as ControlNetType;
-  const controlNetModel = input.controlnet_model || DEFAULT_CONTROLNET_MODELS[controlType];
+  // Use architecture-aware ControlNet model selection
+  const controlNetModel = input.controlnet_model || getControlNetModel(model, controlType);
   const strength = input.strength ?? DEFAULT_STRENGTHS[controlType];
 
   const controlNet: ControlNetConfig = {
@@ -340,7 +365,8 @@ export async function generateWithMultiControlNet(
     return {
       type: controlType,
       image: ctrl.image,
-      controlNetModel: ctrl.controlnet_model || DEFAULT_CONTROLNET_MODELS[controlType],
+      // Use architecture-aware ControlNet model selection
+      controlNetModel: ctrl.controlnet_model || getControlNetModel(model, controlType),
       strength: ctrl.strength ?? DEFAULT_STRENGTHS[controlType],
       startPercent: ctrl.start_percent,
       endPercent: ctrl.end_percent,

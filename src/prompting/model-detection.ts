@@ -1,40 +1,36 @@
 import { ModelFamily, ModelDetection } from "./types.js";
+import { architectures, type ArchitectureId } from "../architectures/index.js";
 
 /**
- * Patterns for detecting model families from model names
+ * Map architecture IDs to model families for prompting.
+ *
+ * Architecture = technical capabilities (ControlNet, resolution, etc.)
+ * Model Family = prompting style (how to write prompts)
+ *
+ * Most architectures map 1:1, but we have additional prompting families
+ * like "realistic" that are prompting styles on top of SDXL architecture.
  */
-const MODEL_PATTERNS: Array<{
+const ARCHITECTURE_TO_FAMILY: Record<ArchitectureId, ModelFamily> = {
+  sd15: "sd15",
+  sdxl: "sdxl",
+  flux: "flux",
+  sd3: "sdxl",  // SD3 uses similar prompting to SDXL for now
+  pony: "pony",
+  illustrious: "illustrious",
+};
+
+/**
+ * Additional prompting-specific patterns not covered by architecture detection.
+ * These override the architecture-based family when matched.
+ *
+ * "realistic" is a prompting style on SDXL architecture that uses
+ * camera/photography terminology.
+ */
+const PROMPTING_OVERRIDES: Array<{
   family: ModelFamily;
   patterns: RegExp[];
   priority: number;
 }> = [
-  {
-    family: "flux",
-    patterns: [/flux/i, /schnell/i],
-    priority: 100,
-  },
-  {
-    family: "pony",
-    patterns: [
-      /pony/i,
-      /pdxl/i,
-      /score_/i,
-      /furry/i,
-      /yiff/i,
-    ],
-    priority: 90,
-  },
-  {
-    family: "illustrious",
-    patterns: [
-      /illustrious/i,
-      /noob/i,
-      /wai.*xl/i,
-      /anime.*xl/i,
-      /novelai/i,
-    ],
-    priority: 85,
-  },
   {
     family: "realistic",
     patterns: [
@@ -48,30 +44,17 @@ const MODEL_PATTERNS: Array<{
     ],
     priority: 80,
   },
-  {
-    family: "sdxl",
-    patterns: [
-      /sdxl/i,
-      /sd.*xl/i,
-      /xl.*base/i,
-      /xl.*refiner/i,
-    ],
-    priority: 50,
-  },
-  {
-    family: "sd15",
-    patterns: [
-      /v1-5/i,
-      /sd.*1\.5/i,
-      /sd15/i,
-      /1\.5.*pruned/i,
-    ],
-    priority: 40,
-  },
 ];
 
 /**
- * Detect the model family from a model name
+ * Detect the model family from a model name.
+ *
+ * This function is used by the prompting system to determine which
+ * prompting strategy to use. It combines architecture detection with
+ * prompting-specific overrides.
+ *
+ * For technical architecture detection (ControlNet, IP-Adapter, etc.),
+ * use the `architectures` registry directly instead.
  */
 export function detectModelFamily(modelName: string): ModelDetection {
   if (!modelName) {
@@ -84,36 +67,27 @@ export function detectModelFamily(modelName: string): ModelDetection {
 
   const normalizedName = modelName.toLowerCase();
 
-  // Sort by priority (highest first)
-  const sortedPatterns = [...MODEL_PATTERNS].sort(
-    (a, b) => b.priority - a.priority
-  );
-
-  for (const { family, patterns, priority } of sortedPatterns) {
+  // First check prompting-specific overrides (like "realistic")
+  for (const { family, patterns, priority } of PROMPTING_OVERRIDES) {
     for (const pattern of patterns) {
       if (pattern.test(normalizedName)) {
         return {
           family,
           confidence: priority / 100,
-          reason: `Matched pattern ${pattern} in model name "${modelName}"`,
+          reason: `Matched prompting pattern ${pattern} in model name "${modelName}"`,
         };
       }
     }
   }
 
-  // Default fallback based on common naming conventions
-  if (normalizedName.includes("xl") || normalizedName.includes("1024")) {
-    return {
-      family: "sdxl",
-      confidence: 0.5,
-      reason: "Detected XL-sized model, assuming SDXL family",
-    };
-  }
+  // Fall back to architecture-based detection
+  const detection = architectures.detect(modelName);
+  const family = ARCHITECTURE_TO_FAMILY[detection.architecture.id] ?? "sdxl";
 
   return {
-    family: "sdxl",
-    confidence: 0.3,
-    reason: "Unknown model, defaulting to SDXL (most common)",
+    family,
+    confidence: detection.confidence,
+    reason: detection.reason,
   };
 }
 
