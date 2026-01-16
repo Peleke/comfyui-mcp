@@ -177,6 +177,16 @@ def get_output_files(history: dict) -> list:
                     "subfolder": gif.get("subfolder", ""),
                     "path": os.path.join(OUTPUT_DIR, gif.get("subfolder", ""), gif["filename"])
                 })
+        # Check various audio output keys (ComfyUI nodes use different ones)
+        for audio_key in ["audio", "audios", "flac", "flacs"]:
+            if audio_key in node_output:
+                for audio in node_output[audio_key]:
+                    files.append({
+                        "type": "audio",
+                        "filename": audio["filename"],
+                        "subfolder": audio.get("subfolder", ""),
+                        "path": os.path.join(OUTPUT_DIR, audio.get("subfolder", ""), audio["filename"])
+                    })
 
     return files
 
@@ -401,35 +411,52 @@ def build_portrait_workflow(params: dict) -> dict:
 def build_tts_workflow(params: dict) -> dict:
     """Build F5-TTS workflow for voice cloning using niknah/ComfyUI-F5-TTS.
 
-    Uses F5TTSAudio (file-based) which reads voice samples from input directory.
-    Voice files should be: sample.wav + sample.txt (transcript)
+    Uses LoadAudio + F5TTSAudioInputs to properly load voice samples.
+    Voice files should be in input/voices/: sample.wav + sample.txt (transcript)
     """
     text = params.get("text", "Hello world")
     sample = params.get("sample", "sample.wav")  # audio file in input/voices folder
     speed = params.get("speed", 1.0)
     seed = params.get("seed", -1)
-    model = params.get("model", "F5")  # F5, F5v1, E2, etc.
+    model = params.get("model", "F5v1")  # F5v1, F5, E2, etc.
 
     if seed == -1:
         seed = int.from_bytes(os.urandom(4), "big")
 
+    # Read transcript from .txt file (same name as audio)
+    sample_base = sample.rsplit(".", 1)[0]  # remove extension
+    transcript_path = f"/workspace/ComfyUI/input/voices/{sample_base}.txt"
+    try:
+        with open(transcript_path, "r") as f:
+            sample_text = f.read().strip()
+    except FileNotFoundError:
+        sample_text = ""  # Fallback if no transcript
+
     return {
         "1": {
-            "class_type": "F5TTSAudio",
+            "class_type": "LoadAudio",
             "inputs": {
-                "sample": sample,
-                "speech": text,
-                "seed": seed,
-                "model": model,
-                "vocoder": "auto",
-                "speed": speed,
-                "model_type": "F5TTS_Base"
+                "audio": f"voices/{sample}"
             }
         },
         "2": {
-            "class_type": "PreviewAudio",
+            "class_type": "F5TTSAudioInputs",
             "inputs": {
-                "audio": ["1", 0]
+                "sample_audio": ["1", 0],
+                "sample_text": sample_text,
+                "speech": text,
+                "seed": seed,
+                "model": model,
+                "vocoder": "vocos",
+                "speed": speed,
+                "model_type": "F5TTS_v1_Base"
+            }
+        },
+        "3": {
+            "class_type": "SaveAudio",
+            "inputs": {
+                "audio": ["2", 0],
+                "filename_prefix": "tts/ComfyUI_TTS"
             }
         }
     }
@@ -496,6 +523,82 @@ def build_lipsync_workflow(params: dict) -> dict:
 
 
 # ============================================================================
+# Workflow Validation
+# ============================================================================
+
+def get_comfyui_schema() -> dict:
+    """Fetch object_info schema from ComfyUI."""
+    try:
+        response = requests.get(f"{COMFYUI_URL}/object_info", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"Failed to fetch schema: {e}")
+    return {}
+
+
+def validate_workflow(workflow: dict) -> dict:
+    """
+    Validate workflow against ComfyUI's object_info schema.
+    Returns {"valid": True} or {"valid": False, "errors": [...]}
+    """
+    schema = get_comfyui_schema()
+    if not schema:
+        return {"valid": True, "warning": "Could not fetch schema for validation"}
+
+    errors = []
+
+    for node_id, node in workflow.items():
+        class_type = node.get("class_type")
+        inputs = node.get("inputs", {})
+
+        # Check if node type exists
+        if class_type not in schema:
+            errors.append({
+                "node_id": node_id,
+                "error": f"Unknown node type: {class_type}",
+                "available_types": "Use 'schema' action to list available nodes"
+            })
+            continue
+
+        node_schema = schema[class_type]
+        input_schema = node_schema.get("input", {})
+
+        # Combine required and optional inputs
+        all_inputs = {}
+        for category in ["required", "optional"]:
+            if category in input_schema:
+                all_inputs.update(input_schema[category])
+
+        # Validate each input
+        for input_name, input_value in inputs.items():
+            # Skip connections (lists like ["1", 0])
+            if isinstance(input_value, list):
+                continue
+
+            if input_name not in all_inputs:
+                # Unknown input - might be ok (dynamic inputs)
+                continue
+
+            input_def = all_inputs[input_name]
+            if isinstance(input_def, list) and len(input_def) > 0:
+                valid_values = input_def[0]
+                # Check enum values
+                if isinstance(valid_values, list) and input_value not in valid_values:
+                    errors.append({
+                        "node_id": node_id,
+                        "class_type": class_type,
+                        "input": input_name,
+                        "error": f"Invalid value: '{input_value}'",
+                        "valid_values": valid_values
+                    })
+
+    if errors:
+        return {"valid": False, "errors": errors}
+    return {"valid": True}
+
+
+# ============================================================================
 # Main Handler
 # ============================================================================
 
@@ -527,6 +630,21 @@ def handler(event: dict) -> dict:
             }
         elif action == "debug":
             return get_debug_info()
+        elif action == "schema":
+            # Return schema for specific node or list all nodes
+            schema = get_comfyui_schema()
+            node_type = input_data.get("node_type")
+            if node_type:
+                if node_type in schema:
+                    return {"node_type": node_type, "schema": schema[node_type]}
+                return {"error": f"Unknown node type: {node_type}"}
+            return {"nodes": list(schema.keys())[:100], "total": len(schema)}
+        elif action == "validate":
+            # Validate a workflow without executing
+            workflow = input_data.get("workflow")
+            if not workflow:
+                return {"error": "No workflow provided"}
+            return validate_workflow(workflow)
 
         # Build appropriate workflow
         if action == "portrait":
@@ -545,8 +663,35 @@ def handler(event: dict) -> dict:
         history = wait_for_completion(prompt_id)
         print(f"Workflow completed")
 
+        # Debug: show what's in history outputs
+        outputs = history.get("outputs", {})
+        print(f"History outputs keys: {list(outputs.keys())}")
+        for node_id, node_output in outputs.items():
+            print(f"  Node {node_id}: {list(node_output.keys())}")
+
         # Get output files
         output_files = get_output_files(history)
+
+        # Fallback: if no audio files found in history for TTS, scan output/tts folder
+        if action == "tts" and not any(f["type"] == "audio" for f in output_files):
+            print("No audio in history, scanning output/tts folder...")
+            tts_output_dir = os.path.join(OUTPUT_DIR, "tts")
+            if os.path.exists(tts_output_dir):
+                # Get most recent flac/wav file
+                import glob
+                audio_files = glob.glob(os.path.join(tts_output_dir, "*.flac")) + \
+                              glob.glob(os.path.join(tts_output_dir, "*.wav"))
+                if audio_files:
+                    # Sort by modification time, newest first
+                    audio_files.sort(key=os.path.getmtime, reverse=True)
+                    latest = audio_files[0]
+                    print(f"Found audio file via scan: {latest}")
+                    output_files.append({
+                        "type": "audio",
+                        "filename": os.path.basename(latest),
+                        "subfolder": "tts",
+                        "path": latest
+                    })
 
         # Upload to Supabase if configured, otherwise return base64
         results = []
