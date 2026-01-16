@@ -64,16 +64,14 @@ import {
   pingComfyUI,
 } from "./tools/health.js";
 import {
-  generateWithIPAdapter,
-  generateWithIPAdapterSchema,
+  ipadapter,
+  ipadapterSchema,
 } from "./tools/ipadapter.js";
 import {
   inpaint,
   inpaintSchema,
   outpaint,
   outpaintSchema,
-  createMask,
-  createMaskSchema,
 } from "./tools/inpaint.js";
 
 // Configuration from environment
@@ -1949,7 +1947,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ====== IP-Adapter Tools ======
       case "generate_with_ipadapter": {
-        const input = generateWithIPAdapterSchema.parse({
+        const input = ipadapterSchema.parse({
           prompt: args?.prompt,
           negative_prompt: args?.negative_prompt,
           reference_image: args?.reference_image,
@@ -1971,10 +1969,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           seed: args?.seed,
           loras: args?.loras,
           output_path: args?.output_path,
-          upload_to_cloud: args?.upload_to_cloud,
         });
 
-        const result = await generateWithIPAdapter(client, input, COMFYUI_MODEL);
+        const result = await ipadapter(client, input, COMFYUI_MODEL);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
@@ -2028,28 +2025,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         const result = await outpaint(client, input, COMFYUI_MODEL);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      case "create_mask": {
-        const input = createMaskSchema.parse({
-          source_image: args?.source_image,
-          preset: args?.preset,
-          text_prompt: args?.text_prompt,
-          region: args?.region,
-          expand_pixels: args?.expand_pixels ?? 0,
-          feather_pixels: args?.feather_pixels ?? 0,
-          invert: args?.invert ?? false,
-          sam_model: args?.sam_model,
-          grounding_dino_model: args?.grounding_dino_model,
-          threshold: args?.threshold ?? 0.3,
-          output_path: args?.output_path,
-          upload_to_cloud: args?.upload_to_cloud,
-        });
-
-        const result = await createMask(client, input);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
