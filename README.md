@@ -55,6 +55,27 @@ Claude: I'll generate that image for you.
 - Node.js 18+
 - At least one Stable Diffusion checkpoint model
 
+### Required Custom Nodes
+
+Some features require additional ComfyUI custom nodes. Install these via ComfyUI Manager or manually:
+
+| Feature | Required Node | Repository |
+|---------|--------------|------------|
+| IP-Adapter (style transfer) | ComfyUI_IPAdapter_plus | [cubiq/ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus) |
+| ControlNet preprocessing | comfyui_controlnet_aux | [Fannovel16/comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) |
+| Intelligent masks (SAM) | comfyui_segment_anything | [storyicon/comfyui_segment_anything](https://github.com/storyicon/comfyui_segment_anything) |
+| Text detection (GroundingDINO) | ComfyUI-GroundingDINO | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) |
+| Lip-sync (SONIC) | ComfyUI-SONIC | [smthemex/ComfyUI-SONIC](https://github.com/smthemex/ComfyUI-SONIC) |
+| TTS (F5-TTS) | ComfyUI-F5-TTS | [chaojie/ComfyUI-F5-TTS](https://github.com/chaojie/ComfyUI-F5-TTS) |
+
+**Quick install with ComfyUI Manager:**
+1. Open ComfyUI web interface
+2. Click "Manager" button
+3. Search for node name and install
+4. Restart ComfyUI
+
+**Core features** (txt2img, img2img, upscaling, basic ControlNet) work without any custom nodes.
+
 ## Quick Start
 
 ### 1. Clone and Install
@@ -257,6 +278,8 @@ Guide image generation using structural information from reference images.
 ### IP-Adapter
 
 Transfer style, composition, or character likeness from reference images.
+
+> **Requires:** [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus) custom node
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -566,6 +589,9 @@ Run `list_models` to see available checkpoints. Model names must match exactly, 
 
 ### "No image in output"
 Check ComfyUI's web interface for workflow errors. The queued prompt may have failed due to missing nodes or invalid parameters.
+
+### "Node does not exist" errors
+Some features require custom nodes. If you see errors like `IPAdapterModelLoader does not exist` or `DWPreprocessor does not exist`, install the required custom nodes (see Prerequisites section).
 
 ### Slow generation
 Generation time depends on hardware, model size, and step count. Reduce steps for faster drafts.
