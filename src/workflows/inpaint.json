@@ -1,0 +1,72 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "source.png"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "mask.png"
+    }
+  },
+  "3": {
+    "class_type": "VAEEncodeForInpaint",
+    "inputs": {
+      "pixels": ["1", 0],
+      "vae": ["4", 2],
+      "mask": ["2", 0],
+      "grow_mask_by": 6
+    }
+  },
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "model.safetensors"
+    }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 7,
+      "denoise": 0.75,
+      "latent_image": ["3", 0],
+      "model": ["4", 0],
+      "negative": ["7", 0],
+      "positive": ["6", 0],
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "seed": 0,
+      "steps": 28
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["4", 1],
+      "text": "a beautiful image"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["4", 1],
+      "text": "bad quality, blurry"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["5", 0],
+      "vae": ["4", 2]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI_MCP_inpaint",
+      "images": ["8", 0]
+    }
+  }
+}

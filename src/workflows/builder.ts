@@ -2,6 +2,7 @@ import baseTxt2ImgWorkflow from "./txt2img.json" with { type: "json" };
 import baseImg2ImgWorkflow from "./img2img.json" with { type: "json" };
 import baseUpscaleWorkflow from "./upscale.json" with { type: "json" };
 import baseControlNetWorkflow from "./controlnet.json" with { type: "json" };
+import baseInpaintWorkflow from "./inpaint.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
 
@@ -40,6 +41,23 @@ export interface UpscaleParams {
   targetWidth?: number;
   targetHeight?: number;
   filenamePrefix?: string;
+}
+
+export interface InpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  maskImage: string;
+  denoise?: number;
+  growMaskBy?: number;
+}
+
+export interface OutpaintParams extends BaseSamplerParams {
+  sourceImage: string;
+  extendLeft?: number;
+  extendRight?: number;
+  extendTop?: number;
+  extendBottom?: number;
+  feathering?: number;
+  denoise?: number;
 }
 
 /**
@@ -159,6 +177,148 @@ export function buildImg2ImgWorkflow(params: Img2ImgParams): Record<string, any>
   if (params.loras && params.loras.length > 0) {
     workflow = injectLoras(workflow, params.loras, "4", "3", ["6", "7"]);
   }
+
+  return workflow;
+}
+
+export function buildInpaintWorkflow(params: InpaintParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseInpaintWorkflow));
+
+  // Set source image
+  workflow["1"].inputs.image = params.sourceImage;
+
+  // Set mask image
+  workflow["2"].inputs.image = params.maskImage;
+
+  // Set checkpoint model
+  workflow["4"].inputs.ckpt_name = params.model;
+
+  // Set positive prompt
+  workflow["6"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["7"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set inpaint parameters
+  workflow["3"].inputs.grow_mask_by = params.growMaskBy ?? 6;
+
+  // Set sampler parameters
+  workflow["5"].inputs.steps = params.steps || 28;
+  workflow["5"].inputs.cfg = params.cfgScale || 7;
+  workflow["5"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["5"].inputs.scheduler = params.scheduler || "normal";
+  workflow["5"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+  workflow["5"].inputs.denoise = params.denoise ?? 0.75;
+
+  // Set filename prefix
+  workflow["9"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_inpaint";
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    workflow = injectLoras(workflow, params.loras, "4", "5", ["6", "7"]);
+  }
+
+  return workflow;
+}
+
+export function buildOutpaintWorkflow(params: OutpaintParams): Record<string, any> {
+  // Outpainting extends the canvas, then inpaints the new areas
+  // Uses ImagePadForOutpaint to create the extended canvas and mask
+
+  const workflow: Record<string, any> = {};
+
+  // Load source image
+  workflow["1"] = {
+    class_type: "LoadImage",
+    inputs: {
+      image: params.sourceImage,
+    },
+  };
+
+  // Pad image for outpainting (creates extended canvas + mask)
+  workflow["2"] = {
+    class_type: "ImagePadForOutpaint",
+    inputs: {
+      image: ["1", 0],
+      left: params.extendLeft ?? 0,
+      right: params.extendRight ?? 0,
+      top: params.extendTop ?? 0,
+      bottom: params.extendBottom ?? 0,
+      feathering: params.feathering ?? 40,
+    },
+  };
+
+  // Load checkpoint
+  workflow["3"] = {
+    class_type: "CheckpointLoaderSimple",
+    inputs: {
+      ckpt_name: params.model,
+    },
+  };
+
+  // Encode for inpainting with the generated mask
+  workflow["4"] = {
+    class_type: "VAEEncodeForInpaint",
+    inputs: {
+      pixels: ["2", 0],
+      vae: ["3", 2],
+      mask: ["2", 1],
+      grow_mask_by: 8,
+    },
+  };
+
+  // Positive prompt
+  workflow["5"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 1],
+      text: params.prompt,
+    },
+  };
+
+  // Negative prompt
+  workflow["6"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 1],
+      text: params.negativePrompt || "bad quality, blurry, ugly, deformed",
+    },
+  };
+
+  // KSampler
+  workflow["7"] = {
+    class_type: "KSampler",
+    inputs: {
+      model: ["3", 0],
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["4", 0],
+      seed: params.seed ?? Math.floor(Math.random() * 2147483647),
+      steps: params.steps || 28,
+      cfg: params.cfgScale || 7,
+      sampler_name: params.sampler || "euler_ancestral",
+      scheduler: params.scheduler || "normal",
+      denoise: params.denoise ?? 0.8,
+    },
+  };
+
+  // VAE Decode
+  workflow["8"] = {
+    class_type: "VAEDecode",
+    inputs: {
+      samples: ["7", 0],
+      vae: ["3", 2],
+    },
+  };
+
+  // Save image
+  workflow["9"] = {
+    class_type: "SaveImage",
+    inputs: {
+      images: ["8", 0],
+      filename_prefix: params.filenamePrefix || "ComfyUI_MCP_outpaint",
+    },
+  };
 
   return workflow;
 }

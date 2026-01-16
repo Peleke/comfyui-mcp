@@ -132,6 +132,27 @@ vi.mock("./tools/upscale.js", () => ({
   },
 }));
 
+vi.mock("./tools/inpaint.js", () => ({
+  inpaint: vi.fn().mockResolvedValue({
+    success: true,
+    path: "/tmp/inpaint.png",
+    seed: 12345,
+    message: "Inpainted image saved",
+  }),
+  inpaintSchema: {
+    parse: vi.fn().mockImplementation((input) => input),
+  },
+  outpaint: vi.fn().mockResolvedValue({
+    success: true,
+    path: "/tmp/outpaint.png",
+    seed: 12345,
+    message: "Outpainted image (right: 256px) saved",
+  }),
+  outpaintSchema: {
+    parse: vi.fn().mockImplementation((input) => input),
+  },
+}));
+
 vi.mock("./tools/controlnet.js", () => ({
   generateWithControlNet: vi.fn().mockResolvedValue({
     success: true,
@@ -284,6 +305,8 @@ describe("Health Endpoints", () => {
       expect(data.endpoints["POST /controlnet"]).toBeDefined();
       expect(data.endpoints["POST /controlnet/multi"]).toBeDefined();
       expect(data.endpoints["POST /preprocess/:type"]).toBeDefined();
+      expect(data.endpoints["POST /inpaint"]).toBeDefined();
+      expect(data.endpoints["POST /outpaint"]).toBeDefined();
     });
   });
 });
@@ -831,6 +854,207 @@ describe("POST /preprocess/:type", () => {
 });
 
 // ============================================================================
+// Inpaint Endpoint
+// ============================================================================
+
+describe("POST /inpaint", () => {
+  it("should require prompt field", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      source_image: "img.png",
+      mask_image: "mask.png",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("prompt is required");
+  });
+
+  it("should require source_image field", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix this",
+      mask_image: "mask.png",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("source_image is required");
+  });
+
+  it("should require mask_image field", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix this",
+      source_image: "img.png",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("mask_image is required");
+  });
+
+  it("should inpaint successfully", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "beautiful face",
+      source_image: "portrait.png",
+      mask_image: "face_mask.png",
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.localPath).toBeDefined();
+    expect(data.seed).toBeDefined();
+    expect(data.message).toBeDefined();
+  });
+
+  it("should accept denoise_strength parameter", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix this",
+      source_image: "img.png",
+      mask_image: "mask.png",
+      denoise_strength: 0.9,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept grow_mask_by parameter", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix this",
+      source_image: "img.png",
+      mask_image: "mask.png",
+      grow_mask_by: 10,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept generation parameters", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix this",
+      negative_prompt: "bad anatomy",
+      source_image: "img.png",
+      mask_image: "mask.png",
+      model: "sd15.safetensors",
+      steps: 35,
+      cfg_scale: 8,
+      sampler: "dpmpp_2m",
+      seed: 12345,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept LoRA configurations", async () => {
+    const res = await makeRequest("/inpaint", "POST", {
+      prompt: "fix hands",
+      source_image: "img.png",
+      mask_image: "mask.png",
+      loras: [
+        { name: "detail_lora.safetensors", strength_model: 0.8 },
+      ],
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+// ============================================================================
+// Outpaint Endpoint
+// ============================================================================
+
+describe("POST /outpaint", () => {
+  it("should require prompt field", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      source_image: "img.png",
+      extend_right: 256,
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("prompt is required");
+  });
+
+  it("should require source_image field", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend",
+      extend_right: 256,
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("source_image is required");
+  });
+
+  it("should require at least one extend direction", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend",
+      source_image: "img.png",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toContain("At least one extend direction");
+  });
+
+  it("should outpaint successfully with extend_right", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "more landscape",
+      source_image: "landscape.png",
+      extend_right: 256,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.localPath).toBeDefined();
+    expect(data.seed).toBeDefined();
+    expect(data.message).toBeDefined();
+  });
+
+  it("should outpaint with multiple directions", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend all sides",
+      source_image: "img.png",
+      extend_left: 100,
+      extend_right: 200,
+      extend_top: 150,
+      extend_bottom: 50,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept feathering parameter", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend",
+      source_image: "img.png",
+      extend_right: 256,
+      feathering: 60,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept denoise_strength parameter", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend",
+      source_image: "img.png",
+      extend_right: 256,
+      denoise_strength: 0.9,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept generation parameters", async () => {
+    const res = await makeRequest("/outpaint", "POST", {
+      prompt: "extend landscape",
+      negative_prompt: "bad quality",
+      source_image: "landscape.png",
+      extend_right: 256,
+      model: "sdxl.safetensors",
+      steps: 40,
+      cfg_scale: 6,
+      seed: 42,
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+// ============================================================================
 // Cloud Upload Integration
 // ============================================================================
 
@@ -902,6 +1126,8 @@ describe("Response Format Consistency", () => {
       { path: "/image", body: { prompt: "test" } },
       { path: "/upscale", body: { input_image: "img.png" } },
       { path: "/controlnet", body: { prompt: "test", control_image: "c.png", control_type: "canny" } },
+      { path: "/inpaint", body: { prompt: "fix", source_image: "s.png", mask_image: "m.png" } },
+      { path: "/outpaint", body: { prompt: "extend", source_image: "s.png", extend_right: 256 } },
     ];
 
     for (const { path, body } of endpoints) {
