@@ -130,7 +130,13 @@ def queue_prompt(workflow: dict) -> str:
         f"{COMFYUI_URL}/prompt",
         json={"prompt": workflow}
     )
-    response.raise_for_status()
+    if response.status_code != 200:
+        # Capture the actual error from ComfyUI
+        try:
+            error_details = response.json()
+        except Exception:
+            error_details = response.text
+        raise RuntimeError(f"ComfyUI error ({response.status_code}): {error_details}")
     return response.json()["prompt_id"]
 
 
@@ -270,6 +276,55 @@ def get_debug_info() -> dict:
         except Exception as e:
             debug["sonic_contents"] = [f"Error: {e}"]
 
+    # Check voices directory
+    voices_path = os.path.join(NETWORK_VOLUME, "voices")
+    debug["voices_path"] = voices_path
+    if os.path.exists(voices_path):
+        debug["voices_exists"] = True
+        try:
+            debug["voices_contents"] = os.listdir(voices_path)[:20]
+        except Exception as e:
+            debug["voices_contents"] = [f"Error: {e}"]
+    else:
+        debug["voices_exists"] = False
+
+    # Check f5_tts directory
+    f5_path = os.path.join(NETWORK_VOLUME, "f5_tts")
+    debug["f5_tts_path"] = f5_path
+    if os.path.exists(f5_path):
+        debug["f5_tts_exists"] = True
+        try:
+            debug["f5_tts_contents"] = os.listdir(f5_path)[:20]
+        except Exception as e:
+            debug["f5_tts_contents"] = [f"Error: {e}"]
+    else:
+        debug["f5_tts_exists"] = False
+
+    # Check ComfyUI input/voices symlink
+    comfyui_voices = "/workspace/ComfyUI/input/voices"
+    debug["comfyui_voices_is_symlink"] = os.path.islink(comfyui_voices)
+    debug["comfyui_voices_exists"] = os.path.exists(comfyui_voices)
+    if debug["comfyui_voices_exists"]:
+        try:
+            debug["comfyui_voices_contents"] = os.listdir(comfyui_voices)[:20]
+        except Exception as e:
+            debug["comfyui_voices_contents"] = [f"Error: {e}"]
+
+    # Check ComfyUI models folder (should have symlinks)
+    comfyui_checkpoints = os.path.join(COMFYUI_MODELS, "checkpoints")
+    debug["comfyui_checkpoints_path"] = comfyui_checkpoints
+    debug["comfyui_checkpoints_is_symlink"] = os.path.islink(comfyui_checkpoints)
+    if os.path.exists(comfyui_checkpoints):
+        debug["comfyui_checkpoints_exists"] = True
+        try:
+            debug["comfyui_checkpoints_contents"] = os.listdir(comfyui_checkpoints)[:20]
+            if os.path.islink(comfyui_checkpoints):
+                debug["comfyui_checkpoints_target"] = os.readlink(comfyui_checkpoints)
+        except Exception as e:
+            debug["comfyui_checkpoints_contents"] = [f"Error: {e}"]
+    else:
+        debug["comfyui_checkpoints_exists"] = False
+
     # Check ComfyUI API if running
     if debug["comfyui_process_alive"]:
         try:
@@ -344,44 +399,37 @@ def build_portrait_workflow(params: dict) -> dict:
 
 
 def build_tts_workflow(params: dict) -> dict:
-    """Build F5-TTS workflow for voice cloning."""
+    """Build F5-TTS workflow for voice cloning using niknah/ComfyUI-F5-TTS.
 
+    Uses F5TTSAudio (file-based) which reads voice samples from input directory.
+    Voice files should be: sample.wav + sample.txt (transcript)
+    """
     text = params.get("text", "Hello world")
-    voice_ref = params.get("voice_reference", "reference.wav")
-    voice_text = params.get("voice_reference_text", "")
+    sample = params.get("sample", "sample.wav")  # audio file in input/voices folder
     speed = params.get("speed", 1.0)
     seed = params.get("seed", -1)
+    model = params.get("model", "F5")  # F5, F5v1, E2, etc.
 
     if seed == -1:
         seed = int.from_bytes(os.urandom(4), "big")
 
     return {
         "1": {
-            "class_type": "LoadAudio",
-            "inputs": {"audio": voice_ref}
+            "class_type": "F5TTSAudio",
+            "inputs": {
+                "sample": sample,
+                "speech": text,
+                "seed": seed,
+                "model": model,
+                "vocoder": "auto",
+                "speed": speed,
+                "model_type": "F5TTS_Base"
+            }
         },
         "2": {
-            "class_type": "F5TTSAudioInputs",
+            "class_type": "PreviewAudio",
             "inputs": {
-                "sample_audio": ["1", 0],
-                "speech": text,
-                "ref_text": voice_text,
-                "speed": speed,
-                "seed": seed
-            }
-        },
-        "3": {
-            "class_type": "F5TTSGenerate",
-            "inputs": {
-                "audio_inputs": ["2", 0],
-                "model": "F5TTS_v1_Base"
-            }
-        },
-        "4": {
-            "class_type": "SaveAudioTensor",
-            "inputs": {
-                "audio": ["3", 0],
-                "filename_prefix": f"tts_{seed}"
+                "audio": ["1", 0]
             }
         }
     }
