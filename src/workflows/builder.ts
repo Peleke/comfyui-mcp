@@ -7,6 +7,10 @@ import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
 
+// Import ControlNetType from architectures (single source of truth)
+// Re-exported below for backwards compatibility
+import { type ControlNetType as ArchControlNetType } from "../architectures/types.js";
+
 export interface LoraConfig {
   name: string;
   strength_model?: number;
@@ -527,14 +531,9 @@ export function buildUpscaleWorkflow(params: UpscaleParams): Record<string, any>
 // ControlNet Support
 // ============================================================================
 
-export type ControlNetType =
-  | "canny"
-  | "depth"
-  | "openpose"
-  | "qrcode"
-  | "scribble"
-  | "lineart"
-  | "semantic_seg";
+// Re-export ControlNetType for backwards compatibility
+// Source of truth is src/architectures/types.ts
+export type ControlNetType = ArchControlNetType;
 
 export interface PreprocessorOptions {
   // Canny

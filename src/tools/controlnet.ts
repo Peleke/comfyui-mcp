@@ -11,7 +11,7 @@ import {
 } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
 import { dirname } from "path";
-import { architectures, type ControlNetType as ArchControlNetType } from "../architectures/index.js";
+import { architectures } from "../architectures/index.js";
 
 // ============================================================================
 // ControlNet Model Selection (Architecture-Aware)
@@ -29,10 +29,7 @@ import { architectures, type ControlNetType as ArchControlNetType } from "../arc
  */
 function getControlNetModel(checkpointName: string, controlType: ControlNetType): string {
   // Use architecture registry to get the correct model
-  const model = architectures.getControlNetModel(
-    checkpointName,
-    controlType as ArchControlNetType
-  );
+  const model = architectures.getControlNetModel(checkpointName, controlType);
 
   if (model) {
     return model;
