@@ -14,6 +14,7 @@ import {
   wrapComfyUIProgress,
   generateTaskId,
 } from "../progress.js";
+import { architectures } from "../architectures/index.js";
 
 // ============================================================================
 // Conventions
@@ -332,17 +333,19 @@ export async function createPortrait(
   } else {
     // SDXL workflow (standard checkpoints like novaFurry, yiffinhell, perfectdeliberate)
     usedModel = model || "perfectdeliberate_v50.safetensors";
+    // Get architecture-aware defaults for this model
+    const archDefaults = architectures.getDefaults(usedModel);
     workflow = buildTxt2ImgWorkflow({
       prompt,
       negativePrompt,
       model: usedModel,
-      steps: steps ?? 28,
-      cfgScale: guidance ?? 7.0,
+      steps: steps ?? archDefaults.steps,
+      cfgScale: guidance ?? archDefaults.cfgScale,
       seed: actualSeed,
       width: width ?? 768,
       height: height ?? 1024,
-      sampler: "euler_ancestral",
-      scheduler: "normal",
+      sampler: archDefaults.sampler,
+      scheduler: archDefaults.scheduler,
       filenamePrefix: "ComfyUI_Portrait",
     });
   }
