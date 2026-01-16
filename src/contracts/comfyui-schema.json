@@ -1,0 +1,903 @@
+{
+  "_meta": {
+    "description": "ComfyUI node schema snapshot for contract testing",
+    "version": "1.0.0",
+    "generatedAt": "2025-01-15T00:00:00.000Z",
+    "nodeCount": 45,
+    "note": "This is a curated subset of ComfyUI nodes used by this project. Update with: npm run contracts:update"
+  },
+  "CheckpointLoaderSimple": {
+    "input": {
+      "required": {
+        "ckpt_name": [["model.safetensors"]]
+      }
+    },
+    "input_order": { "required": ["ckpt_name"] },
+    "output": ["MODEL", "CLIP", "VAE"],
+    "output_is_list": [false, false, false],
+    "output_name": ["MODEL", "CLIP", "VAE"],
+    "name": "CheckpointLoaderSimple",
+    "display_name": "Load Checkpoint",
+    "description": "Loads a checkpoint model",
+    "python_module": "nodes",
+    "category": "loaders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "CLIPTextEncode": {
+    "input": {
+      "required": {
+        "text": ["STRING", { "multiline": true, "dynamicPrompts": true }],
+        "clip": ["CLIP"]
+      }
+    },
+    "input_order": { "required": ["clip", "text"] },
+    "output": ["CONDITIONING"],
+    "output_is_list": [false],
+    "output_name": ["CONDITIONING"],
+    "name": "CLIPTextEncode",
+    "display_name": "CLIP Text Encode (Prompt)",
+    "description": "Encodes text using CLIP",
+    "python_module": "nodes",
+    "category": "conditioning",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "CLIPVisionLoader": {
+    "input": {
+      "required": {
+        "clip_name": [["clip_vision_model.safetensors"]]
+      }
+    },
+    "input_order": { "required": ["clip_name"] },
+    "output": ["CLIP_VISION"],
+    "output_is_list": [false],
+    "output_name": ["CLIP_VISION"],
+    "name": "CLIPVisionLoader",
+    "display_name": "Load CLIP Vision",
+    "description": "Loads a CLIP Vision model",
+    "python_module": "nodes",
+    "category": "loaders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ControlNetLoader": {
+    "input": {
+      "required": {
+        "control_net_name": [["controlnet.safetensors"]]
+      }
+    },
+    "input_order": { "required": ["control_net_name"] },
+    "output": ["CONTROL_NET"],
+    "output_is_list": [false],
+    "output_name": ["CONTROL_NET"],
+    "name": "ControlNetLoader",
+    "display_name": "Load ControlNet Model",
+    "description": "Loads a ControlNet model",
+    "python_module": "nodes",
+    "category": "loaders/controlnet",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ControlNetApplyAdvanced": {
+    "input": {
+      "required": {
+        "positive": ["CONDITIONING"],
+        "negative": ["CONDITIONING"],
+        "control_net": ["CONTROL_NET"],
+        "image": ["IMAGE"],
+        "strength": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01 }],
+        "start_percent": ["FLOAT", { "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001 }],
+        "end_percent": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001 }]
+      },
+      "optional": {
+        "vae": ["VAE"]
+      }
+    },
+    "input_order": { "required": ["positive", "negative", "control_net", "image", "strength", "start_percent", "end_percent"] },
+    "output": ["CONDITIONING", "CONDITIONING"],
+    "output_is_list": [false, false],
+    "output_name": ["positive", "negative"],
+    "name": "ControlNetApplyAdvanced",
+    "display_name": "Apply ControlNet (Advanced)",
+    "description": "Applies a ControlNet model to conditioning",
+    "python_module": "nodes",
+    "category": "conditioning/controlnet",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "EmptyLatentImage": {
+    "input": {
+      "required": {
+        "width": ["INT", { "default": 512, "min": 16, "max": 16384, "step": 8 }],
+        "height": ["INT", { "default": 512, "min": 16, "max": 16384, "step": 8 }],
+        "batch_size": ["INT", { "default": 1, "min": 1, "max": 4096 }]
+      }
+    },
+    "input_order": { "required": ["width", "height", "batch_size"] },
+    "output": ["LATENT"],
+    "output_is_list": [false],
+    "output_name": ["LATENT"],
+    "name": "EmptyLatentImage",
+    "display_name": "Empty Latent Image",
+    "description": "Creates an empty latent image",
+    "python_module": "nodes",
+    "category": "latent",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "F5TTSAudioInputs": {
+    "input": {
+      "required": {
+        "speech": ["STRING", { "multiline": true }],
+        "sample_text": ["STRING", { "multiline": true, "default": "" }],
+        "seed": ["INT", { "default": -1, "min": -1, "max": 2147483647 }],
+        "model": [["F5TTS_v1_Base", "E2TTS_v1_Base"]],
+        "vocoder": [["vocos", "bigvgan"]],
+        "speed": ["FLOAT", { "default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1 }],
+        "model_type": [["F5-TTS", "E2-TTS"]]
+      },
+      "optional": {
+        "sample_audio": ["AUDIO"]
+      }
+    },
+    "input_order": { "required": ["speech", "sample_text", "seed", "model", "vocoder", "speed", "model_type"] },
+    "output": ["AUDIO"],
+    "output_is_list": [false],
+    "output_name": ["audio"],
+    "name": "F5TTSAudioInputs",
+    "display_name": "F5-TTS Audio Inputs",
+    "description": "Text-to-speech with F5-TTS",
+    "python_module": "custom_nodes.ComfyUI-F5-TTS",
+    "category": "audio/tts",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "FeatherMask": {
+    "input": {
+      "required": {
+        "mask": ["MASK"],
+        "left": ["INT", { "default": 0, "min": 0, "max": 1024 }],
+        "top": ["INT", { "default": 0, "min": 0, "max": 1024 }],
+        "right": ["INT", { "default": 0, "min": 0, "max": 1024 }],
+        "bottom": ["INT", { "default": 0, "min": 0, "max": 1024 }]
+      }
+    },
+    "input_order": { "required": ["mask", "left", "top", "right", "bottom"] },
+    "output": ["MASK"],
+    "output_is_list": [false],
+    "output_name": ["MASK"],
+    "name": "FeatherMask",
+    "display_name": "Feather Mask",
+    "description": "Feathers the edges of a mask",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "GetImageSize": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"]
+      }
+    },
+    "input_order": { "required": ["image"] },
+    "output": ["INT", "INT"],
+    "output_is_list": [false, false],
+    "output_name": ["width", "height"],
+    "name": "GetImageSize",
+    "display_name": "Get Image Size",
+    "description": "Returns the width and height of an image",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "GrowMask": {
+    "input": {
+      "required": {
+        "mask": ["MASK"],
+        "expand": ["INT", { "default": 0, "min": -1024, "max": 1024 }],
+        "tapered_corners": ["BOOLEAN", { "default": true }]
+      }
+    },
+    "input_order": { "required": ["mask", "expand", "tapered_corners"] },
+    "output": ["MASK"],
+    "output_is_list": [false],
+    "output_name": ["MASK"],
+    "name": "GrowMask",
+    "display_name": "Grow Mask",
+    "description": "Expands or contracts a mask",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ImageOnlyCheckpointLoader": {
+    "input": {
+      "required": {
+        "ckpt_name": [["svd_model.safetensors"]]
+      }
+    },
+    "input_order": { "required": ["ckpt_name"] },
+    "output": ["MODEL", "CLIP_VISION", "VAE"],
+    "output_is_list": [false, false, false],
+    "output_name": ["MODEL", "CLIP_VISION", "VAE"],
+    "name": "ImageOnlyCheckpointLoader",
+    "display_name": "Load Checkpoint (Image Only)",
+    "description": "Loads image-only checkpoint for video models",
+    "python_module": "nodes",
+    "category": "loaders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ImagePadForOutpaint": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "left": ["INT", { "default": 0, "min": 0, "max": 16384, "step": 8 }],
+        "top": ["INT", { "default": 0, "min": 0, "max": 16384, "step": 8 }],
+        "right": ["INT", { "default": 0, "min": 0, "max": 16384, "step": 8 }],
+        "bottom": ["INT", { "default": 0, "min": 0, "max": 16384, "step": 8 }],
+        "feathering": ["INT", { "default": 40, "min": 0, "max": 16384 }]
+      }
+    },
+    "input_order": { "required": ["image", "left", "top", "right", "bottom", "feathering"] },
+    "output": ["IMAGE", "MASK"],
+    "output_is_list": [false, false],
+    "output_name": ["IMAGE", "MASK"],
+    "name": "ImagePadForOutpaint",
+    "display_name": "Pad Image for Outpainting",
+    "description": "Pads an image for outpainting",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ImageScale": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "upscale_method": [["nearest-exact", "bilinear", "area", "bicubic", "lanczos"]],
+        "width": ["INT", { "default": 512, "min": 0, "max": 16384, "step": 1 }],
+        "height": ["INT", { "default": 512, "min": 0, "max": 16384, "step": 1 }],
+        "crop": [["disabled", "center"]]
+      }
+    },
+    "input_order": { "required": ["image", "upscale_method", "width", "height", "crop"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "ImageScale",
+    "display_name": "Upscale Image",
+    "description": "Scales an image to specified dimensions",
+    "python_module": "nodes",
+    "category": "image/upscaling",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ImageUpscaleWithModel": {
+    "input": {
+      "required": {
+        "upscale_model": ["UPSCALE_MODEL"],
+        "image": ["IMAGE"]
+      }
+    },
+    "input_order": { "required": ["upscale_model", "image"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "ImageUpscaleWithModel",
+    "display_name": "Upscale Image (using Model)",
+    "description": "Upscales image using a neural network model",
+    "python_module": "nodes",
+    "category": "image/upscaling",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "InvertMask": {
+    "input": {
+      "required": {
+        "mask": ["MASK"]
+      }
+    },
+    "input_order": { "required": ["mask"] },
+    "output": ["MASK"],
+    "output_is_list": [false],
+    "output_name": ["MASK"],
+    "name": "InvertMask",
+    "display_name": "Invert Mask",
+    "description": "Inverts a mask",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "IPAdapterModelLoader": {
+    "input": {
+      "required": {
+        "ipadapter_file": [["ip-adapter.safetensors"]]
+      }
+    },
+    "input_order": { "required": ["ipadapter_file"] },
+    "output": ["IPADAPTER"],
+    "output_is_list": [false],
+    "output_name": ["IPADAPTER"],
+    "name": "IPAdapterModelLoader",
+    "display_name": "Load IPAdapter Model",
+    "description": "Loads an IPAdapter model",
+    "python_module": "custom_nodes.ComfyUI_IPAdapter_plus",
+    "category": "ipadapter",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "IPAdapterAdvanced": {
+    "input": {
+      "required": {
+        "model": ["MODEL"],
+        "ipadapter": ["IPADAPTER"],
+        "image": ["IMAGE"],
+        "weight": ["FLOAT", { "default": 1.0, "min": -1.0, "max": 5.0, "step": 0.05 }],
+        "weight_type": [["linear", "ease in", "ease out", "ease in-out", "reverse in-out", "weak input", "weak output", "weak middle", "strong middle", "style transfer", "composition", "strong style transfer"]],
+        "combine_embeds": [["concat", "add", "subtract", "average", "norm average"]],
+        "start_at": ["FLOAT", { "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001 }],
+        "end_at": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001 }]
+      },
+      "optional": {
+        "clip_vision": ["CLIP_VISION"],
+        "image_negative": ["IMAGE"],
+        "attn_mask": ["MASK"],
+        "embeds_scaling": [["V only", "K+V", "K+V w/ C penalty", "K+mean(V) w/ C penalty"]]
+      }
+    },
+    "input_order": { "required": ["model", "ipadapter", "image", "weight", "weight_type", "combine_embeds", "start_at", "end_at"] },
+    "output": ["MODEL"],
+    "output_is_list": [false],
+    "output_name": ["MODEL"],
+    "name": "IPAdapterAdvanced",
+    "display_name": "IPAdapter Advanced",
+    "description": "Apply IPAdapter with advanced options",
+    "python_module": "custom_nodes.ComfyUI_IPAdapter_plus",
+    "category": "ipadapter",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "KSampler": {
+    "input": {
+      "required": {
+        "model": ["MODEL"],
+        "seed": ["INT", { "default": 0, "min": 0, "max": 18446744073709551615 }],
+        "steps": ["INT", { "default": 20, "min": 1, "max": 10000 }],
+        "cfg": ["FLOAT", { "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.1 }],
+        "sampler_name": [["euler", "euler_cfg_pp", "euler_ancestral", "euler_ancestral_cfg_pp", "heun", "heunpp2", "dpm_2", "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_sde_gpu", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_2m_sde_gpu", "dpmpp_3m_sde", "dpmpp_3m_sde_gpu", "ddpm", "lcm", "ipndm", "ipndm_v", "deis", "ddim", "uni_pc", "uni_pc_bh2"]],
+        "scheduler": [["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform", "beta"]],
+        "positive": ["CONDITIONING"],
+        "negative": ["CONDITIONING"],
+        "latent_image": ["LATENT"],
+        "denoise": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01 }]
+      }
+    },
+    "input_order": { "required": ["model", "seed", "steps", "cfg", "sampler_name", "scheduler", "positive", "negative", "latent_image", "denoise"] },
+    "output": ["LATENT"],
+    "output_is_list": [false],
+    "output_name": ["LATENT"],
+    "name": "KSampler",
+    "display_name": "KSampler",
+    "description": "Samples from the model",
+    "python_module": "nodes",
+    "category": "sampling",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "LoadAudio": {
+    "input": {
+      "required": {
+        "audio": [["audio.wav"]]
+      }
+    },
+    "input_order": { "required": ["audio"] },
+    "output": ["AUDIO"],
+    "output_is_list": [false],
+    "output_name": ["AUDIO"],
+    "name": "LoadAudio",
+    "display_name": "Load Audio",
+    "description": "Loads an audio file",
+    "python_module": "nodes",
+    "category": "audio",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "LoadImage": {
+    "input": {
+      "required": {
+        "image": [["image.png"]]
+      }
+    },
+    "input_order": { "required": ["image"] },
+    "output": ["IMAGE", "MASK"],
+    "output_is_list": [false, false],
+    "output_name": ["IMAGE", "MASK"],
+    "name": "LoadImage",
+    "display_name": "Load Image",
+    "description": "Loads an image from disk",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "LoraLoader": {
+    "input": {
+      "required": {
+        "model": ["MODEL"],
+        "clip": ["CLIP"],
+        "lora_name": [["lora.safetensors"]],
+        "strength_model": ["FLOAT", { "default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01 }],
+        "strength_clip": ["FLOAT", { "default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01 }]
+      }
+    },
+    "input_order": { "required": ["model", "clip", "lora_name", "strength_model", "strength_clip"] },
+    "output": ["MODEL", "CLIP"],
+    "output_is_list": [false, false],
+    "output_name": ["MODEL", "CLIP"],
+    "name": "LoraLoader",
+    "display_name": "Load LoRA",
+    "description": "Loads a LoRA model",
+    "python_module": "nodes",
+    "category": "loaders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "MaskComposite": {
+    "input": {
+      "required": {
+        "destination": ["MASK"],
+        "source": ["MASK"],
+        "x": ["INT", { "default": 0, "min": 0, "max": 16384 }],
+        "y": ["INT", { "default": 0, "min": 0, "max": 16384 }],
+        "operation": [["multiply", "add", "subtract", "and", "or", "xor"]]
+      }
+    },
+    "input_order": { "required": ["destination", "source", "x", "y", "operation"] },
+    "output": ["MASK"],
+    "output_is_list": [false],
+    "output_name": ["MASK"],
+    "name": "MaskComposite",
+    "display_name": "Mask Composite",
+    "description": "Combines two masks",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "MaskToImage": {
+    "input": {
+      "required": {
+        "mask": ["MASK"]
+      }
+    },
+    "input_order": { "required": ["mask"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "MaskToImage",
+    "display_name": "Convert Mask to Image",
+    "description": "Converts a mask to an image",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SaveAudioTensor": {
+    "input": {
+      "required": {
+        "audio": ["AUDIO"],
+        "filename_prefix": ["STRING", { "default": "audio/ComfyUI" }]
+      }
+    },
+    "input_order": { "required": ["audio", "filename_prefix"] },
+    "output": [],
+    "output_is_list": [],
+    "output_name": [],
+    "name": "SaveAudioTensor",
+    "display_name": "Save Audio",
+    "description": "Saves audio to disk",
+    "python_module": "nodes",
+    "category": "audio",
+    "output_node": true,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SaveImage": {
+    "input": {
+      "required": {
+        "images": ["IMAGE"],
+        "filename_prefix": ["STRING", { "default": "ComfyUI" }]
+      }
+    },
+    "input_order": { "required": ["images", "filename_prefix"] },
+    "output": [],
+    "output_is_list": [],
+    "output_name": [],
+    "name": "SaveImage",
+    "display_name": "Save Image",
+    "description": "Saves images to disk",
+    "python_module": "nodes",
+    "category": "image",
+    "output_node": true,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SetLatentNoiseMask": {
+    "input": {
+      "required": {
+        "samples": ["LATENT"],
+        "mask": ["MASK"]
+      }
+    },
+    "input_order": { "required": ["samples", "mask"] },
+    "output": ["LATENT"],
+    "output_is_list": [false],
+    "output_name": ["LATENT"],
+    "name": "SetLatentNoiseMask",
+    "display_name": "Set Latent Noise Mask",
+    "description": "Sets a noise mask on latents for inpainting",
+    "python_module": "nodes",
+    "category": "latent/inpaint",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SolidMask": {
+    "input": {
+      "required": {
+        "value": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01 }],
+        "width": ["INT", { "default": 512, "min": 1, "max": 16384 }],
+        "height": ["INT", { "default": 512, "min": 1, "max": 16384 }]
+      }
+    },
+    "input_order": { "required": ["value", "width", "height"] },
+    "output": ["MASK"],
+    "output_is_list": [false],
+    "output_name": ["MASK"],
+    "name": "SolidMask",
+    "display_name": "Solid Mask",
+    "description": "Creates a solid mask",
+    "python_module": "nodes",
+    "category": "mask",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SONIC_PreData": {
+    "input": {
+      "required": {
+        "clip_vision": ["CLIP_VISION"],
+        "vae": ["VAE"],
+        "image": ["IMAGE"],
+        "audio": ["AUDIO"],
+        "min_resolution": ["INT", { "default": 512, "min": 256, "max": 1024 }],
+        "duration": ["INT", { "default": 99999, "min": 1, "max": 999999 }],
+        "expand_ratio": ["FLOAT", { "default": 1.0, "min": 0.5, "max": 2.0, "step": 0.1 }]
+      }
+    },
+    "input_order": { "required": ["clip_vision", "vae", "image", "audio", "min_resolution", "duration", "expand_ratio"] },
+    "output": ["SONIC_PRE_DATA"],
+    "output_is_list": [false],
+    "output_name": ["SONIC_PRE_DATA"],
+    "name": "SONIC_PreData",
+    "display_name": "SONIC Pre-Data",
+    "description": "Prepares data for SONIC lip-sync",
+    "python_module": "custom_nodes.ComfyUI-SONIC",
+    "category": "video/lipsync",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SONICSampler": {
+    "input": {
+      "required": {
+        "model": ["SONIC_MODEL"],
+        "data_dict": ["SONIC_PRE_DATA"],
+        "seed": ["INT", { "default": 0, "min": 0, "max": 2147483647 }],
+        "randomize": [["fixed", "randomize"]],
+        "inference_steps": ["INT", { "default": 25, "min": 1, "max": 100 }],
+        "dynamic_scale": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1 }],
+        "fps": ["FLOAT", { "default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1 }]
+      }
+    },
+    "input_order": { "required": ["model", "data_dict", "seed", "randomize", "inference_steps", "dynamic_scale", "fps"] },
+    "output": ["IMAGE", "FLOAT"],
+    "output_is_list": [false, false],
+    "output_name": ["frames", "frame_rate"],
+    "name": "SONICSampler",
+    "display_name": "SONIC Sampler",
+    "description": "Generates lip-synced video frames",
+    "python_module": "custom_nodes.ComfyUI-SONIC",
+    "category": "video/lipsync",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SONICTLoader": {
+    "input": {
+      "required": {
+        "model": ["MODEL"],
+        "sonic_unet": [["unet.pth"]],
+        "ip_audio_scale": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.1 }],
+        "use_interframe": ["BOOLEAN", { "default": true }],
+        "dtype": [["fp16", "fp32", "bf16"]]
+      }
+    },
+    "input_order": { "required": ["model", "sonic_unet", "ip_audio_scale", "use_interframe", "dtype"] },
+    "output": ["SONIC_MODEL"],
+    "output_is_list": [false],
+    "output_name": ["SONIC_MODEL"],
+    "name": "SONICTLoader",
+    "display_name": "Load SONIC Model",
+    "description": "Loads SONIC lip-sync model",
+    "python_module": "custom_nodes.ComfyUI-SONIC",
+    "category": "video/lipsync",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "UpscaleModelLoader": {
+    "input": {
+      "required": {
+        "model_name": [["RealESRGAN_x4plus.pth"]]
+      }
+    },
+    "input_order": { "required": ["model_name"] },
+    "output": ["UPSCALE_MODEL"],
+    "output_is_list": [false],
+    "output_name": ["UPSCALE_MODEL"],
+    "name": "UpscaleModelLoader",
+    "display_name": "Load Upscale Model",
+    "description": "Loads an upscale model",
+    "python_module": "nodes",
+    "category": "loaders",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "VAEDecode": {
+    "input": {
+      "required": {
+        "samples": ["LATENT"],
+        "vae": ["VAE"]
+      }
+    },
+    "input_order": { "required": ["samples", "vae"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "VAEDecode",
+    "display_name": "VAE Decode",
+    "description": "Decodes latents to images",
+    "python_module": "nodes",
+    "category": "latent",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "VAEEncode": {
+    "input": {
+      "required": {
+        "pixels": ["IMAGE"],
+        "vae": ["VAE"]
+      }
+    },
+    "input_order": { "required": ["pixels", "vae"] },
+    "output": ["LATENT"],
+    "output_is_list": [false],
+    "output_name": ["LATENT"],
+    "name": "VAEEncode",
+    "display_name": "VAE Encode",
+    "description": "Encodes images to latents",
+    "python_module": "nodes",
+    "category": "latent",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "VAEEncodeForInpaint": {
+    "input": {
+      "required": {
+        "pixels": ["IMAGE"],
+        "vae": ["VAE"],
+        "mask": ["MASK"],
+        "grow_mask_by": ["INT", { "default": 6, "min": 0, "max": 64, "step": 1 }]
+      }
+    },
+    "input_order": { "required": ["pixels", "vae", "mask", "grow_mask_by"] },
+    "output": ["LATENT"],
+    "output_is_list": [false],
+    "output_name": ["LATENT"],
+    "name": "VAEEncodeForInpaint",
+    "display_name": "VAE Encode (for Inpainting)",
+    "description": "Encodes images with mask for inpainting",
+    "python_module": "nodes",
+    "category": "latent/inpaint",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "VHS_VideoCombine": {
+    "input": {
+      "required": {
+        "images": ["IMAGE"],
+        "frame_rate": ["FLOAT", { "default": 8.0, "min": 1.0, "max": 120.0, "step": 1.0 }],
+        "loop_count": ["INT", { "default": 0, "min": 0, "max": 100 }],
+        "filename_prefix": ["STRING", { "default": "ComfyUI" }],
+        "format": [["video/h264-mp4", "video/h265-mp4", "video/webm", "image/gif", "image/webp"]],
+        "pingpong": ["BOOLEAN", { "default": false }],
+        "save_output": ["BOOLEAN", { "default": true }]
+      },
+      "optional": {
+        "audio": ["AUDIO"]
+      }
+    },
+    "input_order": { "required": ["images", "frame_rate", "loop_count", "filename_prefix", "format", "pingpong", "save_output"] },
+    "output": ["VHS_FILENAMES"],
+    "output_is_list": [false],
+    "output_name": ["Filenames"],
+    "name": "VHS_VideoCombine",
+    "display_name": "Video Combine",
+    "description": "Combines images into a video",
+    "python_module": "custom_nodes.ComfyUI-VideoHelperSuite",
+    "category": "video",
+    "output_node": true,
+    "deprecated": false,
+    "experimental": false
+  },
+  "CannyEdgePreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "low_threshold": ["INT", { "default": 100, "min": 1, "max": 255 }],
+        "high_threshold": ["INT", { "default": 200, "min": 1, "max": 255 }],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "low_threshold", "high_threshold", "resolution"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "CannyEdgePreprocessor",
+    "display_name": "Canny Edge",
+    "description": "Canny edge detection preprocessor",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Line Extractors",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "DepthAnythingPreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "ckpt_name": [["depth_anything_vitl14.pth", "depth_anything_vitb14.pth", "depth_anything_vits14.pth"]],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "ckpt_name", "resolution"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "DepthAnythingPreprocessor",
+    "display_name": "Depth Anything",
+    "description": "Depth estimation preprocessor",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Normal and Depth Estimators",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "DWPreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "detect_hand": [["enable", "disable"]],
+        "detect_body": [["enable", "disable"]],
+        "detect_face": [["enable", "disable"]],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "detect_hand", "detect_body", "detect_face", "resolution"] },
+    "output": ["IMAGE", "POSE_KEYPOINT"],
+    "output_is_list": [false, false],
+    "output_name": ["IMAGE", "POSE_KEYPOINT"],
+    "name": "DWPreprocessor",
+    "display_name": "DWPose Estimator",
+    "description": "OpenPose-style pose detection",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Faces and Poses Estimators",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "LineArtPreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "coarse": [["disable", "enable"]],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "coarse", "resolution"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "LineArtPreprocessor",
+    "display_name": "Lineart",
+    "description": "Lineart extraction preprocessor",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Line Extractors",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "ScribblePreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "resolution"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "ScribblePreprocessor",
+    "display_name": "Scribble Lines",
+    "description": "Scribble/sketch preprocessor",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Line Extractors",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  },
+  "SemSegPreprocessor": {
+    "input": {
+      "required": {
+        "image": ["IMAGE"],
+        "resolution": ["INT", { "default": 512, "min": 64, "max": 2048 }]
+      }
+    },
+    "input_order": { "required": ["image", "resolution"] },
+    "output": ["IMAGE"],
+    "output_is_list": [false],
+    "output_name": ["IMAGE"],
+    "name": "SemSegPreprocessor",
+    "display_name": "OneFormer ADE20K Segmentor",
+    "description": "Semantic segmentation preprocessor",
+    "python_module": "custom_nodes.comfyui_controlnet_aux",
+    "category": "ControlNet Preprocessors/Semantic Segmentation",
+    "output_node": false,
+    "deprecated": false,
+    "experimental": false
+  }
+}
