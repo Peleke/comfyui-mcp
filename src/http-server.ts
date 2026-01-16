@@ -32,6 +32,10 @@ import {
   outpaint,
   outpaintSchema,
 } from "./tools/inpaint.js";
+import {
+  ipadapter,
+  ipadapterSchema,
+} from "./tools/ipadapter.js";
 import { checkConnection, pingComfyUI } from "./tools/health.js";
 import { listModels } from "./tools/list-models.js";
 import { mkdir } from "fs/promises";
@@ -117,6 +121,7 @@ app.use("/controlnet/*", authMiddleware);
 app.use("/preprocess/*", authMiddleware);
 app.use("/inpaint", authMiddleware);
 app.use("/outpaint", authMiddleware);
+app.use("/ipadapter", authMiddleware);
 
 // ============================================================================
 // Health Endpoints
@@ -727,6 +732,60 @@ app.post("/outpaint", async (c) => {
   }
 });
 
+/**
+ * POST /ipadapter - Generate with IP-Adapter for identity preservation
+ */
+app.post("/ipadapter", async (c) => {
+  try {
+    const body = await c.req.json();
+
+    if (!body.prompt) {
+      return c.json({ error: "prompt is required" }, 400);
+    }
+    if (!body.reference_image) {
+      return c.json({ error: "reference_image is required" }, 400);
+    }
+
+    const outputPath = body.output_path || join(OUTPUT_DIR, `ipadapter_${randomUUID()}.png`);
+    await mkdir(OUTPUT_DIR, { recursive: true });
+
+    const input = ipadapterSchema.parse({
+      ...body,
+      output_path: outputPath,
+    });
+
+    const result = await ipadapter(client, input, COMFYUI_MODEL);
+
+    // Upload to cloud storage if configured
+    let signedUrl: string | undefined;
+    const uploadToCloud = body.upload_to_cloud ?? true;
+    if (uploadToCloud && isCloudStorageConfigured()) {
+      try {
+        const storage = getStorageProvider();
+        const remotePath = generateRemotePath("images", basename(outputPath));
+        const uploadResult = await storage.upload(result.path, remotePath);
+        signedUrl = uploadResult.signedUrl || uploadResult.url || undefined;
+      } catch (uploadErr) {
+        console.error("Cloud upload failed:", uploadErr);
+      }
+    }
+
+    return c.json({
+      success: true,
+      localPath: result.path,
+      signedUrl,
+      seed: result.seed,
+      referenceCount: result.referenceCount,
+      message: result.message,
+    });
+  } catch (err) {
+    console.error("IP-Adapter generation failed:", err);
+    return c.json({
+      error: err instanceof Error ? err.message : "IP-Adapter generation failed",
+    }, 500);
+  }
+});
+
 // ============================================================================
 // Async Queue Endpoints
 // ============================================================================
@@ -962,6 +1021,7 @@ app.get("/", (c) => {
       "POST /preprocess/:type": "Control image preprocessing (auth required)",
       "POST /inpaint": "Inpaint image regions with mask (auth required)",
       "POST /outpaint": "Extend image canvas (auth required)",
+      "POST /ipadapter": "Identity preservation with IP-Adapter (auth required)",
     },
     async: {
       enabled: ASYNC_MODE,

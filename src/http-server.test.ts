@@ -184,6 +184,19 @@ vi.mock("./tools/controlnet.js", () => ({
   },
 }));
 
+vi.mock("./tools/ipadapter.js", () => ({
+  ipadapter: vi.fn().mockResolvedValue({
+    success: true,
+    path: "/tmp/ipadapter.png",
+    seed: 12345,
+    referenceCount: 1,
+    message: "Generated image with IP-Adapter (1 reference, weight: 0.8). Saved to /tmp/ipadapter.png",
+  }),
+  ipadapterSchema: {
+    parse: vi.fn().mockImplementation((input) => input),
+  },
+}));
+
 vi.mock("./tools/health.js", () => ({
   checkConnection: vi.fn().mockResolvedValue({
     gpu: { name: "Test GPU", vram_total: "10GB" },
@@ -307,6 +320,7 @@ describe("Health Endpoints", () => {
       expect(data.endpoints["POST /preprocess/:type"]).toBeDefined();
       expect(data.endpoints["POST /inpaint"]).toBeDefined();
       expect(data.endpoints["POST /outpaint"]).toBeDefined();
+      expect(data.endpoints["POST /ipadapter"]).toBeDefined();
     });
   });
 });
@@ -1055,6 +1069,192 @@ describe("POST /outpaint", () => {
 });
 
 // ============================================================================
+// IP-Adapter Endpoint
+// ============================================================================
+
+describe("POST /ipadapter", () => {
+  it("should require prompt field", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      reference_image: "ref.png",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("prompt is required");
+  });
+
+  it("should require reference_image field", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+    });
+    expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toBe("reference_image is required");
+  });
+
+  it("should generate with IP-Adapter successfully", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character in a forest",
+      reference_image: "character_ref.png",
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.localPath).toBeDefined();
+    expect(data.seed).toBeDefined();
+    expect(data.referenceCount).toBe(1);
+  });
+
+  it("should accept weight parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      weight: 0.9,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept weight_type parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      weight_type: "style transfer",
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept start_at and end_at parameters", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      start_at: 0.1,
+      end_at: 0.8,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept combine_embeds parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      combine_embeds: "average",
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept additional reference_images", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref1.png",
+      reference_images: ["ref2.png", "ref3.png"],
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept ipadapter_model parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      ipadapter_model: "ip-adapter-plus_sd15.safetensors",
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept clip_vision_model parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      clip_vision_model: "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept generation parameters", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      negative_prompt: "bad quality",
+      reference_image: "ref.png",
+      model: "sd15.safetensors",
+      width: 512,
+      height: 768,
+      steps: 28,
+      cfg_scale: 7,
+      sampler: "euler_ancestral",
+      scheduler: "normal",
+      seed: 42,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should accept LoRA configurations", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      loras: [
+        { name: "style_lora.safetensors", strength_model: 0.8, strength_clip: 0.8 },
+      ],
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("should handle upload_to_cloud parameter", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      upload_to_cloud: false,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.success).toBe(true);
+  });
+
+  it("should return signedUrl when cloud upload succeeds", async () => {
+    const res = await makeRequest("/ipadapter", "POST", {
+      prompt: "a character",
+      reference_image: "ref.png",
+      upload_to_cloud: true,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.signedUrl).toBeDefined();
+  });
+
+  it("should accept all weight types", async () => {
+    const weightTypes = [
+      "linear", "ease in", "ease out", "ease in-out", "reverse in-out",
+      "weak input", "weak output", "weak middle", "strong middle",
+      "style transfer", "composition", "strong style transfer",
+    ];
+
+    for (const weightType of weightTypes) {
+      const res = await makeRequest("/ipadapter", "POST", {
+        prompt: "test",
+        reference_image: "ref.png",
+        weight_type: weightType,
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("should accept all combine_embeds options", async () => {
+    const options = ["concat", "add", "subtract", "average", "norm average"];
+
+    for (const option of options) {
+      const res = await makeRequest("/ipadapter", "POST", {
+        prompt: "test",
+        reference_image: "ref.png",
+        combine_embeds: option,
+      });
+      expect(res.status).toBe(200);
+    }
+  });
+});
+
+// ============================================================================
 // Cloud Upload Integration
 // ============================================================================
 
@@ -1128,6 +1328,7 @@ describe("Response Format Consistency", () => {
       { path: "/controlnet", body: { prompt: "test", control_image: "c.png", control_type: "canny" } },
       { path: "/inpaint", body: { prompt: "fix", source_image: "s.png", mask_image: "m.png" } },
       { path: "/outpaint", body: { prompt: "extend", source_image: "s.png", extend_right: 256 } },
+      { path: "/ipadapter", body: { prompt: "character", reference_image: "ref.png" } },
     ];
 
     for (const { path, body } of endpoints) {

@@ -3,6 +3,7 @@ import baseImg2ImgWorkflow from "./img2img.json" with { type: "json" };
 import baseUpscaleWorkflow from "./upscale.json" with { type: "json" };
 import baseControlNetWorkflow from "./controlnet.json" with { type: "json" };
 import baseInpaintWorkflow from "./inpaint.json" with { type: "json" };
+import baseIPAdapterWorkflow from "./ipadapter.json" with { type: "json" };
 import baseTTSWorkflow from "./tts.json" with { type: "json" };
 import baseLipSyncWorkflow from "./lipsync-sonic.json" with { type: "json" };
 
@@ -58,6 +59,41 @@ export interface OutpaintParams extends BaseSamplerParams {
   extendBottom?: number;
   feathering?: number;
   denoise?: number;
+}
+
+export type IPAdapterWeightType =
+  | "linear"
+  | "ease in"
+  | "ease out"
+  | "ease in-out"
+  | "reverse in-out"
+  | "weak input"
+  | "weak output"
+  | "weak middle"
+  | "strong middle"
+  | "style transfer"
+  | "composition"
+  | "strong style transfer";
+
+export type IPAdapterCombineEmbeds =
+  | "concat"
+  | "add"
+  | "subtract"
+  | "average"
+  | "norm average";
+
+export interface IPAdapterParams extends BaseSamplerParams {
+  width?: number;
+  height?: number;
+  referenceImage: string;
+  referenceImages?: string[]; // For multi-reference
+  weight?: number;
+  weightType?: IPAdapterWeightType;
+  startAt?: number;
+  endAt?: number;
+  combineEmbeds?: IPAdapterCombineEmbeds;
+  ipadapterModel?: string;
+  clipVisionModel?: string;
 }
 
 /**
@@ -319,6 +355,145 @@ export function buildOutpaintWorkflow(params: OutpaintParams): Record<string, an
       filename_prefix: params.filenamePrefix || "ComfyUI_MCP_outpaint",
     },
   };
+
+  return workflow;
+}
+
+/**
+ * Build an IP-Adapter workflow for identity preservation
+ *
+ * IP-Adapter allows using reference images to guide generation,
+ * preserving character identity, style, or composition.
+ */
+export function buildIPAdapterWorkflow(params: IPAdapterParams): Record<string, any> {
+  let workflow = JSON.parse(JSON.stringify(baseIPAdapterWorkflow));
+
+  // Set checkpoint model
+  workflow["1"].inputs.ckpt_name = params.model;
+
+  // Set CLIP Vision model (for image embedding)
+  if (params.clipVisionModel) {
+    workflow["2"].inputs.clip_name = params.clipVisionModel;
+  }
+
+  // Set IP-Adapter model
+  if (params.ipadapterModel) {
+    workflow["3"].inputs.ipadapter_file = params.ipadapterModel;
+  }
+
+  // Set reference image
+  workflow["4"].inputs.image = params.referenceImage;
+
+  // Set IP-Adapter parameters
+  workflow["5"].inputs.weight = params.weight ?? 0.8;
+  workflow["5"].inputs.weight_type = params.weightType ?? "linear";
+  workflow["5"].inputs.start_at = params.startAt ?? 0.0;
+  workflow["5"].inputs.end_at = params.endAt ?? 1.0;
+  workflow["5"].inputs.combine_embeds = params.combineEmbeds ?? "concat";
+
+  // Set dimensions
+  workflow["6"].inputs.width = params.width || 512;
+  workflow["6"].inputs.height = params.height || 768;
+
+  // Set positive prompt
+  workflow["7"].inputs.text = params.prompt;
+
+  // Set negative prompt
+  workflow["8"].inputs.text = params.negativePrompt || "bad quality, blurry, ugly, deformed";
+
+  // Set sampler parameters
+  workflow["9"].inputs.steps = params.steps || 28;
+  workflow["9"].inputs.cfg = params.cfgScale || 7;
+  workflow["9"].inputs.sampler_name = params.sampler || "euler_ancestral";
+  workflow["9"].inputs.scheduler = params.scheduler || "normal";
+  workflow["9"].inputs.seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+
+  // Set filename prefix
+  workflow["11"].inputs.filename_prefix = params.filenamePrefix || "ComfyUI_MCP_ipadapter";
+
+  // Handle multiple reference images if provided
+  if (params.referenceImages && params.referenceImages.length > 0) {
+    // Add additional reference images and create IPAdapterBatch or chain
+    const allImages = [params.referenceImage, ...params.referenceImages];
+
+    // Remove the single image loader
+    delete workflow["4"];
+
+    // Track current model source for chaining
+    let currentModelSource: [string, number] = ["1", 0];
+
+    allImages.forEach((image, index) => {
+      const imageNodeId = `ref_image_${index}`;
+      const ipadapterNodeId = `ipadapter_apply_${index}`;
+
+      // Load reference image
+      workflow[imageNodeId] = {
+        class_type: "LoadImage",
+        inputs: {
+          image,
+        },
+      };
+
+      // Apply IP-Adapter for this image
+      workflow[ipadapterNodeId] = {
+        class_type: "IPAdapterAdvanced",
+        inputs: {
+          model: currentModelSource,
+          ipadapter: ["3", 0],
+          clip_vision: ["2", 0],
+          image: [imageNodeId, 0],
+          weight: (params.weight ?? 0.8) / allImages.length, // Distribute weight
+          weight_type: params.weightType ?? "linear",
+          start_at: params.startAt ?? 0.0,
+          end_at: params.endAt ?? 1.0,
+          combine_embeds: params.combineEmbeds ?? "concat",
+        },
+      };
+
+      // Update model source for next iteration
+      currentModelSource = [ipadapterNodeId, 0];
+    });
+
+    // Wire final IP-Adapter output to KSampler
+    workflow["9"].inputs.model = currentModelSource;
+
+    // Remove the default IP-Adapter apply node
+    delete workflow["5"];
+  }
+
+  // Inject LoRAs if specified (after IP-Adapter in the chain)
+  if (params.loras && params.loras.length > 0) {
+    // Get current model source (either from IP-Adapter chain or default)
+    const modelSource = params.referenceImages && params.referenceImages.length > 0
+      ? workflow["9"].inputs.model
+      : ["5", 0];
+
+    let currentModelSource: [string, number] = modelSource;
+    let currentClipSource: [string, number] = ["1", 1];
+
+    params.loras.forEach((lora, index) => {
+      const loraNodeId = `lora_${index}`;
+
+      workflow[loraNodeId] = {
+        class_type: "LoraLoader",
+        inputs: {
+          lora_name: lora.name,
+          strength_model: lora.strength_model ?? 1.0,
+          strength_clip: lora.strength_clip ?? 1.0,
+          model: currentModelSource,
+          clip: currentClipSource,
+        },
+      };
+
+      currentModelSource = [loraNodeId, 0];
+      currentClipSource = [loraNodeId, 1];
+    });
+
+    // Wire to KSampler and text encoders
+    workflow["9"].inputs.model = currentModelSource;
+    workflow["7"].inputs.clip = currentClipSource;
+    workflow["8"].inputs.clip = currentClipSource;
+  }
 
   return workflow;
 }
