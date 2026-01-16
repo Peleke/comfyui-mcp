@@ -39,12 +39,67 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "comfyui-outputs")
 comfyui_process = None
 
 
+def setup_model_symlinks():
+    """Symlink network volume models into ComfyUI models folder."""
+    if not os.path.exists(NETWORK_VOLUME):
+        print(f"Network volume not found at {NETWORK_VOLUME}")
+        return
+
+    # Model directories to symlink
+    model_dirs = [
+        "checkpoints",
+        "loras",
+        "vae",
+        "controlnet",
+        "clip",
+        "clip_vision",
+        "sonic",
+        "video",
+        "f5_tts",
+        "whisper",
+        "animatediff_models",
+    ]
+
+    for model_dir in model_dirs:
+        volume_path = os.path.join(NETWORK_VOLUME, model_dir)
+        comfyui_path = os.path.join(COMFYUI_MODELS, model_dir)
+
+        if os.path.exists(volume_path):
+            # Remove existing dir/link if present
+            if os.path.islink(comfyui_path):
+                os.unlink(comfyui_path)
+            elif os.path.isdir(comfyui_path):
+                import shutil
+                shutil.rmtree(comfyui_path)
+
+            os.symlink(volume_path, comfyui_path)
+            print(f"Linked {model_dir}: {volume_path} -> {comfyui_path}")
+
+    # Also symlink input directories for voices/avatars
+    for input_dir in ["voices", "avatars"]:
+        volume_path = os.path.join(NETWORK_VOLUME, input_dir)
+        comfyui_path = os.path.join("/workspace/ComfyUI/input", input_dir)
+
+        if os.path.exists(volume_path):
+            if os.path.islink(comfyui_path):
+                os.unlink(comfyui_path)
+            elif os.path.isdir(comfyui_path):
+                import shutil
+                shutil.rmtree(comfyui_path)
+
+            os.symlink(volume_path, comfyui_path)
+            print(f"Linked input/{input_dir}")
+
+
 def start_comfyui():
     """Start ComfyUI server in background."""
     global comfyui_process
 
     if comfyui_process is not None:
         return
+
+    # Setup symlinks before starting
+    setup_model_symlinks()
 
     print("Starting ComfyUI server...")
     comfyui_process = subprocess.Popen(
