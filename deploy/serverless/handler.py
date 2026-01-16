@@ -375,7 +375,7 @@ def get_debug_info() -> dict:
 def build_portrait_workflow(params: dict) -> dict:
     """Build txt2img workflow for portrait generation."""
 
-    model = params.get("model", "sd_xl_base_1.0.safetensors")
+    model = params.get("model", "Deliberate_v5.safetensors")
     prompt = params.get("prompt", params.get("description", "A portrait"))
     negative = params.get("negative_prompt", "low quality, blurry, distorted")
     width = params.get("width", 768)
