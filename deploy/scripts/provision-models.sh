@@ -4,17 +4,12 @@
 # Run this in a RunPod provisioner pod with network volume mounted
 #
 # Usage:
-#   # Set HF_TOKEN env var or pass as argument
-#   export HF_TOKEN="hf_xxxxx"
-#   ./provision-models.sh
-#
-#   # Or pass token directly
-#   ./provision-models.sh hf_xxxxx
+#   ./provision-models.sh hf_YOURTOKEN
+#   # Or: curl -sL <raw-url> | bash -s hf_YOURTOKEN
 #
 
 set -e
 
-# Configuration
 VOLUME="${RUNPOD_VOLUME:-/runpod-volume}"
 HF_TOKEN="${1:-$HF_TOKEN}"
 
@@ -22,7 +17,7 @@ HF_TOKEN="${1:-$HF_TOKEN}"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 log() { echo -e "${GREEN}[+]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
@@ -31,111 +26,76 @@ err() { echo -e "${RED}[X]${NC} $1"; }
 # Check volume
 if [ ! -d "$VOLUME" ]; then
     err "Network volume not found at $VOLUME"
-    err "Make sure you're running this in a pod with the volume mounted"
     exit 1
 fi
 
 log "Network volume: $VOLUME"
 log "Free space: $(df -h "$VOLUME" | tail -1 | awk '{print $4}')"
 
-# Install HuggingFace CLI if needed
-if ! command -v huggingface-cli &> /dev/null; then
-    log "Installing huggingface_hub..."
-    pip install -q "huggingface_hub[cli]"
+# Check token
+if [ -z "$HF_TOKEN" ]; then
+    err "No HF token provided!"
+    err "Usage: $0 hf_YOURTOKEN"
+    exit 1
 fi
 
-# Login if token provided
-if [ -n "$HF_TOKEN" ]; then
-    log "Logging in to HuggingFace..."
-    huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
-else
-    warn "No HF_TOKEN provided - some gated models may fail"
-    warn "Set HF_TOKEN env var or pass as argument"
-fi
+log "HF Token: ${HF_TOKEN:0:10}..."
 
 # Create directories
-mkdir -p "$VOLUME"/{checkpoints,sonic,f5_tts,whisper,video}
+mkdir -p "$VOLUME"/{sonic,video,whisper,f5_tts,checkpoints}
 
-# ============================================================================
-# SONIC (Lip-Sync)
-# ============================================================================
-log ""
-log "=== SONIC Models ==="
+# Use Python directly - CLI is broken on many images
+log "Downloading models via Python API..."
 
-if [ -f "$VOLUME/sonic/unet.pth" ]; then
-    log "SONIC already downloaded, skipping"
-else
-    log "Downloading SONIC from LeonJoe13/Sonic..."
-    huggingface-cli download LeonJoe13/Sonic \
-        --local-dir "$VOLUME/sonic" \
-        --local-dir-use-symlinks False
-fi
+python3 << PYTHON_EOF
+import os
+os.environ["HF_TOKEN"] = "$HF_TOKEN"
+from huggingface_hub import snapshot_download, hf_hub_download
 
-# ============================================================================
-# SVD (Stable Video Diffusion for SONIC)
-# ============================================================================
-log ""
-log "=== SVD XT 1.1 ==="
+def log(msg):
+    print(f"\033[0;32m[+]\033[0m {msg}")
 
-if [ -f "$VOLUME/video/svd_xt_1_1.safetensors" ]; then
-    log "SVD already downloaded, skipping"
-else
-    log "Downloading SVD XT 1.1..."
-    huggingface-cli download stabilityai/stable-video-diffusion-img2vid-xt-1-1 \
-        svd_xt_1_1.safetensors \
-        --local-dir "$VOLUME/video" \
-        --local-dir-use-symlinks False
-fi
+def warn(msg):
+    print(f"\033[1;33m[!]\033[0m {msg}")
 
-# ============================================================================
-# Whisper (for SONIC audio processing)
-# ============================================================================
-log ""
-log "=== Whisper Tiny ==="
+# SONIC
+sonic_marker = "$VOLUME/sonic/unet.pth"
+if os.path.exists(sonic_marker):
+    log("SONIC already downloaded, skipping")
+else:
+    log("Downloading SONIC...")
+    snapshot_download("LeonJoe13/Sonic", local_dir="$VOLUME/sonic", local_dir_use_symlinks=False)
 
-if [ -d "$VOLUME/whisper/whisper-tiny" ]; then
-    log "Whisper already downloaded, skipping"
-else
-    log "Downloading Whisper Tiny..."
-    huggingface-cli download openai/whisper-tiny \
-        --local-dir "$VOLUME/whisper/whisper-tiny" \
-        --local-dir-use-symlinks False
-fi
+# SVD
+svd_marker = "$VOLUME/video/svd_xt_1_1.safetensors"
+if os.path.exists(svd_marker):
+    log("SVD already downloaded, skipping")
+else:
+    log("Downloading SVD XT 1.1...")
+    hf_hub_download("stabilityai/stable-video-diffusion-img2vid-xt-1-1", filename="svd_xt_1_1.safetensors", local_dir="$VOLUME/video", local_dir_use_symlinks=False)
 
-# ============================================================================
-# F5-TTS (Voice Cloning)
-# ============================================================================
-log ""
-log "=== F5-TTS ==="
+# Whisper
+whisper_marker = "$VOLUME/whisper/whisper-tiny/config.json"
+if os.path.exists(whisper_marker):
+    log("Whisper already downloaded, skipping")
+else:
+    log("Downloading Whisper Tiny...")
+    snapshot_download("openai/whisper-tiny", local_dir="$VOLUME/whisper/whisper-tiny", local_dir_use_symlinks=False)
 
-if [ -f "$VOLUME/f5_tts/F5TTS_v1_Base/model_1250000.safetensors" ]; then
-    log "F5-TTS already downloaded, skipping"
-else
-    log "Downloading F5-TTS..."
-    huggingface-cli download SWivid/F5-TTS \
-        --local-dir "$VOLUME/f5_tts" \
-        --local-dir-use-symlinks False
-fi
+# F5-TTS
+f5_marker = "$VOLUME/f5_tts/F5TTS_v1_Base"
+if os.path.exists(f5_marker):
+    log("F5-TTS already downloaded, skipping")
+else:
+    log("Downloading F5-TTS...")
+    snapshot_download("SWivid/F5-TTS", local_dir="$VOLUME/f5_tts", local_dir_use_symlinks=False)
 
-# ============================================================================
+log("All downloads complete!")
+PYTHON_EOF
+
 # Summary
-# ============================================================================
 log ""
-log "=== Download Complete ==="
-log ""
-log "Volume contents:"
-ls -la "$VOLUME"
-log ""
-log "SONIC:"
-ls -la "$VOLUME/sonic" 2>/dev/null || warn "SONIC not found"
-log ""
-log "Checkpoints:"
-ls -la "$VOLUME/checkpoints" 2>/dev/null || warn "No checkpoints"
-log ""
-log "Video:"
-ls -la "$VOLUME/video" 2>/dev/null || warn "No video models"
-log ""
-log "Disk usage:"
-du -sh "$VOLUME"/*
+log "=== Summary ==="
+du -sh "$VOLUME"/* 2>/dev/null || true
 log ""
 log "Total: $(du -sh "$VOLUME" | cut -f1)"
