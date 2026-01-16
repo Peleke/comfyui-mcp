@@ -36,7 +36,7 @@ export { getStorageConfigFromEnv } from "./provider.js";
 
 // Re-export implementations (classes)
 export { LocalStorageProvider } from "./local.js";
-export { SupabaseStorageProvider } from "./supabase.js";
+export { SupabaseStorageProvider, SupabaseStorageError } from "./supabase.js";
 export { GCPStorageProvider } from "./gcp.js";
 
 // Re-export config types (interfaces - type-only export for runtime safety)
@@ -142,4 +142,79 @@ export function generateRemotePath(
   const timestamp = Date.now();
   const sanitizedFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
   return `${prefix}${type}/${timestamp}_${sanitizedFilename}`;
+}
+
+/**
+ * Result of a cloud upload attempt
+ */
+export interface CloudUploadResult {
+  /** Whether upload was attempted */
+  attempted: boolean;
+  /** Whether upload succeeded */
+  success: boolean;
+  /** Remote URL (signed URL preferred, falls back to public URL) */
+  remoteUrl?: string;
+  /** Error message if upload failed */
+  error?: string;
+  /** Whether the error is likely transient (network issues, rate limits) */
+  isTransient?: boolean;
+}
+
+/**
+ * Upload a local file to cloud storage with proper error handling
+ *
+ * This is the recommended way to upload files from tools, as it:
+ * - Handles the "cloud not configured" case gracefully
+ * - Provides structured error information
+ * - Doesn't throw on failures (returns error info instead)
+ *
+ * @param localPath - Path to the local file
+ * @param assetType - Type of asset for path organization
+ * @param filename - Filename for the remote path
+ * @param uploadToCloud - Whether upload was requested
+ * @returns CloudUploadResult with status and URL/error info
+ */
+export async function uploadToCloudStorage(
+  localPath: string,
+  assetType: "images" | "videos" | "audio",
+  filename: string,
+  uploadToCloud: boolean = true
+): Promise<CloudUploadResult> {
+  // Not configured or not requested
+  if (!uploadToCloud || !isCloudStorageConfigured()) {
+    return {
+      attempted: false,
+      success: false,
+    };
+  }
+
+  try {
+    const storage = getStorageProvider();
+    const remotePath = generateRemotePath(assetType, filename);
+    const result = await storage.upload(localPath, remotePath);
+
+    return {
+      attempted: true,
+      success: true,
+      remoteUrl: result.signedUrl || result.url || undefined,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Check if this is a transient error that might succeed on retry
+    const isTransient =
+      message.includes("timeout") ||
+      message.includes("network") ||
+      message.includes("ECONNRESET") ||
+      message.includes("429") ||
+      message.includes("503") ||
+      message.includes("504");
+
+    return {
+      attempted: true,
+      success: false,
+      error: message,
+      isTransient,
+    };
+  }
 }
