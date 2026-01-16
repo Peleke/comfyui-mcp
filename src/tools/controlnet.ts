@@ -63,8 +63,8 @@ const controlNetTypeSchema = z.enum([
 ]);
 
 const preprocessorOptionsSchema = z.object({
-  low_threshold: z.number().optional().describe("Canny: low threshold (default: 100)"),
-  high_threshold: z.number().optional().describe("Canny: high threshold (default: 200)"),
+  low_threshold: z.number().optional().describe("Canny: low threshold 0.01-0.99 (default: 0.4)"),
+  high_threshold: z.number().optional().describe("Canny: high threshold 0.01-0.99 (default: 0.8)"),
   detect_body: z.boolean().optional().describe("OpenPose: detect body (default: true)"),
   detect_face: z.boolean().optional().describe("OpenPose: detect face (default: true)"),
   detect_hands: z.boolean().optional().describe("OpenPose: detect hands (default: true)"),
