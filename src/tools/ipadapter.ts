@@ -7,6 +7,7 @@ import {
 } from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
 import { dirname } from "path";
+import { architectures } from "../architectures/index.js";
 
 // ============================================================================
 // Schemas
@@ -103,32 +104,34 @@ async function extractAndSaveImage(
 }
 
 /**
- * Auto-detect appropriate IP-Adapter model based on checkpoint
+ * Auto-detect appropriate IP-Adapter model based on checkpoint.
+ *
+ * Uses the architecture registry to detect the checkpoint's architecture
+ * and return the correct IP-Adapter model.
  */
 function detectIPAdapterModel(checkpointName: string): string {
-  const lower = checkpointName.toLowerCase();
-
-  // SDXL models
-  if (lower.includes("sdxl") || lower.includes("xl")) {
-    return "ip-adapter-plus_sdxl_vit-h.safetensors";
+  const config = architectures.getIPAdapterConfig(checkpointName);
+  if (config) {
+    return config.model;
   }
 
-  // Default to SD1.5
+  // Fallback to SD1.5 if architecture doesn't support IP-Adapter
   return "ip-adapter-plus_sd15.safetensors";
 }
 
 /**
- * Auto-detect appropriate CLIP Vision model
+ * Auto-detect appropriate CLIP Vision model based on checkpoint.
+ *
+ * Uses the architecture registry to detect the checkpoint's architecture
+ * and return the correct CLIP Vision model.
  */
 function detectClipVisionModel(checkpointName: string): string {
-  const lower = checkpointName.toLowerCase();
-
-  // SDXL models use ViT-bigG
-  if (lower.includes("sdxl") || lower.includes("xl")) {
-    return "CLIP-ViT-bigG-14-laion2B-39B-b160k.safetensors";
+  const config = architectures.getIPAdapterConfig(checkpointName);
+  if (config) {
+    return config.clipVision;
   }
 
-  // SD1.5 uses ViT-H
+  // Fallback to SD1.5 CLIP Vision
   return "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
 }
 
