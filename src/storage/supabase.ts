@@ -29,12 +29,77 @@ export interface SupabaseStorageConfig {
   bucket: string;
 }
 
+/** Default retry configuration */
+const DEFAULT_RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+};
+
+/**
+ * Error class for Supabase storage operations
+ */
+export class SupabaseStorageError extends Error {
+  constructor(
+    message: string,
+    public readonly operation: string,
+    public readonly statusCode?: number,
+    public readonly isRetryable: boolean = false
+  ) {
+    super(message);
+    this.name = "SupabaseStorageError";
+  }
+}
+
+/**
+ * Sleep for a given number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Calculate exponential backoff delay with jitter
+ */
+function getBackoffDelay(attempt: number, baseDelay: number, maxDelay: number): number {
+  const exponentialDelay = baseDelay * Math.pow(2, attempt);
+  const jitter = Math.random() * 0.3 * exponentialDelay; // 0-30% jitter
+  return Math.min(exponentialDelay + jitter, maxDelay);
+}
+
+/**
+ * Determine if an error is retryable
+ */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof SupabaseStorageError) {
+    return error.isRetryable;
+  }
+
+  // Network errors are retryable
+  if (error instanceof TypeError && error.message.includes("fetch")) {
+    return true;
+  }
+
+  // Check for retryable HTTP status codes
+  const statusCode = (error as any)?.statusCode || (error as any)?.status;
+  if (statusCode) {
+    // 408 Request Timeout, 429 Too Many Requests, 500+ Server Errors
+    return statusCode === 408 || statusCode === 429 || statusCode >= 500;
+  }
+
+  return false;
+}
+
 export class SupabaseStorageProvider implements StorageProvider {
   readonly name = "supabase";
   private storage: StorageClient;
   private bucket: string;
+  private retryConfig: typeof DEFAULT_RETRY_CONFIG;
 
-  constructor(config: SupabaseStorageConfig) {
+  constructor(
+    config: SupabaseStorageConfig,
+    retryConfig: Partial<typeof DEFAULT_RETRY_CONFIG> = {}
+  ) {
     if (!config.url) {
       throw new Error("Supabase URL is required");
     }
@@ -42,167 +107,171 @@ export class SupabaseStorageProvider implements StorageProvider {
       throw new Error("Supabase service key is required");
     }
 
-    // Use StorageClient directly with explicit auth headers
-    // This works with both old JWT format and new sb_secret_ format
     const storageUrl = `${config.url}/storage/v1`;
-    console.log(`[Supabase] Initializing StorageClient with URL: ${storageUrl}`);
-    console.log(`[Supabase] Using bucket: ${config.bucket}`);
-    console.log(`[Supabase] Key prefix: ${config.serviceKey.substring(0, 20)}...`);
     this.storage = new StorageClient(storageUrl, {
       apikey: config.serviceKey,
       Authorization: `Bearer ${config.serviceKey}`,
     });
     this.bucket = config.bucket;
+    this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...retryConfig };
+  }
+
+  /**
+   * Execute an operation with retry logic
+   */
+  private async withRetry<T>(
+    operation: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= this.retryConfig.maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        // Don't retry if error is not retryable or this is the last attempt
+        if (!isRetryableError(error) || attempt === this.retryConfig.maxRetries) {
+          throw error;
+        }
+
+        // Calculate backoff delay and wait
+        const delay = getBackoffDelay(
+          attempt,
+          this.retryConfig.baseDelayMs,
+          this.retryConfig.maxDelayMs
+        );
+
+        await sleep(delay);
+      }
+    }
+
+    // Should never reach here, but TypeScript needs this
+    throw lastError || new Error(`${operation} failed after retries`);
   }
 
   async upload(localPath: string, remotePath: string): Promise<UploadResult> {
-    // Read file as buffer
-    const fileBuffer = await fs.readFile(localPath);
-    const contentType = this.guessContentType(localPath);
+    return this.withRetry("upload", async () => {
+      const fileBuffer = await fs.readFile(localPath);
+      const contentType = this.guessContentType(localPath);
 
-    console.log(`[Supabase] Uploading to bucket: ${this.bucket}, path: ${remotePath}`);
-    console.log(`[Supabase] File size: ${fileBuffer.length} bytes, content-type: ${contentType}`);
+      const { data, error } = await this.storage
+        .from(this.bucket)
+        .upload(remotePath, fileBuffer, {
+          contentType,
+          upsert: true,
+        });
 
-    // Try raw fetch first to see actual API response
-    const rawUrl = `${(this.storage as any).url}/object/${this.bucket}/${remotePath}`;
-    console.log(`[Supabase] Raw upload URL: ${rawUrl}`);
+      if (error) {
+        const statusCode = (error as any).statusCode || (error as any).status;
+        const isRetryable =
+          statusCode === 408 || statusCode === 429 || (statusCode && statusCode >= 500);
 
-    try {
-      const rawResponse = await fetch(rawUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${(this.storage as any).headers.Authorization.split(' ')[1]}`,
-          'apikey': (this.storage as any).headers.apikey,
-          'Content-Type': contentType,
-          'x-upsert': 'true',
-        },
-        body: fileBuffer,
-      });
-      const rawText = await rawResponse.text();
-      console.log(`[Supabase] Raw response status: ${rawResponse.status}`);
-      console.log(`[Supabase] Raw response body: ${rawText.substring(0, 500)}`);
-
-      if (rawResponse.ok) {
-        const jsonData = JSON.parse(rawText);
-        // Get public URL
-        const publicUrl = `${(this.storage as any).url}/object/public/${this.bucket}/${remotePath}`;
-        // Get signed URL
-        const { data: signedData } = await this.storage
-          .from(this.bucket)
-          .createSignedUrl(remotePath, 3600);
-
-        return {
-          path: jsonData.Key || remotePath,
-          url: publicUrl,
-          signedUrl: signedData?.signedUrl,
-          size: fileBuffer.length,
-        };
+        throw new SupabaseStorageError(
+          `Upload failed: ${error.message}`,
+          "upload",
+          statusCode,
+          isRetryable
+        );
       }
-    } catch (rawErr) {
-      console.log(`[Supabase] Raw fetch error:`, rawErr);
-    }
 
-    // Fallback to SDK
-    const { data, error } = await this.storage
-      .from(this.bucket)
-      .upload(remotePath, fileBuffer, {
-        contentType,
-        upsert: true, // Overwrite if exists
-      });
+      // Get public URL (works for public buckets)
+      const { data: urlData } = this.storage
+        .from(this.bucket)
+        .getPublicUrl(remotePath);
 
-    console.log(`[Supabase] Upload response - data:`, data, `error:`, error);
+      // Generate signed URL for private bucket access
+      const { data: signedData, error: signedError } = await this.storage
+        .from(this.bucket)
+        .createSignedUrl(remotePath, 3600);
 
-    if (error) {
-      // Include full error details for debugging
-      // Supabase error object may have: message, error, statusCode, status
-      const errMsg = error.message || (error as any).error || 'Unknown error';
-      const errCode = (error as any).statusCode || (error as any).status || '';
-      const fullError = `${errMsg}${errCode ? ` (status: ${errCode})` : ''}`;
-      console.error('Supabase upload error details:', {
-        message: error.message,
-        error: (error as any).error,
-        statusCode: (error as any).statusCode,
-        status: (error as any).status,
-        cause: (error as any).cause,
-        raw: JSON.stringify(error),
-      });
-      throw new Error(`Supabase upload failed: ${fullError}`);
-    }
+      if (signedError) {
+        throw new SupabaseStorageError(
+          `Failed to create signed URL: ${signedError.message}`,
+          "createSignedUrl"
+        );
+      }
 
-    // Get public URL (may not work if bucket is private)
-    const { data: urlData } = this.storage
-      .from(this.bucket)
-      .getPublicUrl(remotePath);
-
-    // Generate signed URL for private bucket access (1 hour default)
-    const { data: signedData } = await this.storage
-      .from(this.bucket)
-      .createSignedUrl(remotePath, 3600);
-
-    return {
-      path: data.path,
-      url: urlData.publicUrl,
-      signedUrl: signedData?.signedUrl,
-      size: fileBuffer.length,
-    };
+      return {
+        path: data.path,
+        url: urlData.publicUrl,
+        signedUrl: signedData?.signedUrl,
+        size: fileBuffer.length,
+      };
+    });
   }
 
   async download(remotePath: string, localPath: string): Promise<void> {
-    const { data, error } = await this.storage
-      .from(this.bucket)
-      .download(remotePath);
+    return this.withRetry("download", async () => {
+      const { data, error } = await this.storage
+        .from(this.bucket)
+        .download(remotePath);
 
-    if (error) {
-      throw new Error(`Supabase download failed: ${error.message}`);
-    }
+      if (error) {
+        const statusCode = (error as any).statusCode || (error as any).status;
+        throw new SupabaseStorageError(
+          `Download failed: ${error.message}`,
+          "download",
+          statusCode,
+          statusCode >= 500
+        );
+      }
 
-    // Ensure destination directory exists
-    await fs.mkdir(path.dirname(localPath), { recursive: true });
-
-    // Write to local file
-    const buffer = Buffer.from(await data.arrayBuffer());
-    await fs.writeFile(localPath, buffer);
+      await fs.mkdir(path.dirname(localPath), { recursive: true });
+      const buffer = Buffer.from(await data.arrayBuffer());
+      await fs.writeFile(localPath, buffer);
+    });
   }
 
   async list(prefix: string): Promise<StorageObject[]> {
-    const { data, error } = await this.storage
-      .from(this.bucket)
-      .list(prefix, {
-        limit: 1000,
-        sortBy: { column: "created_at", order: "desc" },
-      });
+    return this.withRetry("list", async () => {
+      const { data, error } = await this.storage
+        .from(this.bucket)
+        .list(prefix, {
+          limit: 1000,
+          sortBy: { column: "created_at", order: "desc" },
+        });
 
-    if (error) {
-      throw new Error(`Supabase list failed: ${error.message}`);
-    }
+      if (error) {
+        throw new SupabaseStorageError(
+          `List failed: ${error.message}`,
+          "list"
+        );
+      }
 
-    return (data || [])
-      .filter((item) => item.name !== ".emptyFolderPlaceholder")
-      .map((item) => ({
-        name: item.name,
-        path: prefix ? `${prefix}/${item.name}` : item.name,
-        size: item.metadata?.size || 0,
-        contentType: item.metadata?.mimetype || "application/octet-stream",
-        created: new Date(item.created_at),
-        metadata: item.metadata as Record<string, string> | undefined,
-      }));
+      return (data || [])
+        .filter((item) => item.name !== ".emptyFolderPlaceholder")
+        .map((item) => ({
+          name: item.name,
+          path: prefix ? `${prefix}/${item.name}` : item.name,
+          size: item.metadata?.size || 0,
+          contentType: item.metadata?.mimetype || "application/octet-stream",
+          created: new Date(item.created_at),
+          metadata: item.metadata as Record<string, string> | undefined,
+        }));
+    });
   }
 
   async getSignedUrl(remotePath: string, expiresInSeconds = 3600): Promise<string> {
-    const { data, error } = await this.storage
-      .from(this.bucket)
-      .createSignedUrl(remotePath, expiresInSeconds);
+    return this.withRetry("getSignedUrl", async () => {
+      const { data, error } = await this.storage
+        .from(this.bucket)
+        .createSignedUrl(remotePath, expiresInSeconds);
 
-    if (error) {
-      throw new Error(`Supabase signed URL failed: ${error.message}`);
-    }
+      if (error) {
+        throw new SupabaseStorageError(
+          `Signed URL failed: ${error.message}`,
+          "getSignedUrl"
+        );
+      }
 
-    return data.signedUrl;
+      return data.signedUrl;
+    });
   }
 
   async healthCheck(): Promise<HealthCheckResult> {
     try {
-      // Try to list the bucket (empty prefix)
       const { error } = await this.storage
         .from(this.bucket)
         .list("", { limit: 1 });
@@ -218,40 +287,50 @@ export class SupabaseStorageProvider implements StorageProvider {
         ok: true,
         details: {
           bucket: this.bucket,
+          provider: "supabase",
         },
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
-        error: `Health check failed: ${error}`,
+        error: `Health check failed: ${message}`,
       };
     }
   }
 
   async delete(remotePath: string): Promise<void> {
-    const { error } = await this.storage
-      .from(this.bucket)
-      .remove([remotePath]);
+    return this.withRetry("delete", async () => {
+      const { error } = await this.storage
+        .from(this.bucket)
+        .remove([remotePath]);
 
-    if (error) {
-      throw new Error(`Supabase delete failed: ${error.message}`);
-    }
+      if (error) {
+        throw new SupabaseStorageError(
+          `Delete failed: ${error.message}`,
+          "delete"
+        );
+      }
+    });
   }
 
   async exists(remotePath: string): Promise<boolean> {
-    // Try to get metadata - if it fails, file doesn't exist
-    const { data, error } = await this.storage
-      .from(this.bucket)
-      .list(path.dirname(remotePath), {
-        limit: 1,
-        search: path.basename(remotePath),
-      });
+    try {
+      const { data, error } = await this.storage
+        .from(this.bucket)
+        .list(path.dirname(remotePath), {
+          limit: 1,
+          search: path.basename(remotePath),
+        });
 
-    if (error) {
+      if (error) {
+        return false;
+      }
+
+      return data.some((item) => item.name === path.basename(remotePath));
+    } catch {
       return false;
     }
-
-    return data.some((item) => item.name === path.basename(remotePath));
   }
 
   /**

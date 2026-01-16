@@ -619,7 +619,7 @@ describe("generateWithComposition", () => {
     const calledWorkflow = queueSpy.mock.calls[0][0];
     expect(calledWorkflow["20"]).toBeDefined();
     expect(calledWorkflow["20"].class_type).toBe(
-      "OneFormer-ADE20K-SemSegPreprocessor"
+      "UniFormer-SemSegPreprocessor"
     );
   });
 });

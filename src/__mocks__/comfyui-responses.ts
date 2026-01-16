@@ -82,7 +82,26 @@ export const mockHistoryComplete = {
   "test-prompt-id-12345": {
     prompt: {},
     outputs: {
+      // SaveImage node varies by workflow (9 for some, 10 for inpaint/outpaint, 8 for rectangle mask)
+      "8": {
+        images: [
+          {
+            filename: "ComfyUI_00001_.png",
+            subfolder: "",
+            type: "output",
+          },
+        ],
+      },
       "9": {
+        images: [
+          {
+            filename: "ComfyUI_00001_.png",
+            subfolder: "",
+            type: "output",
+          },
+        ],
+      },
+      "10": {
         images: [
           {
             filename: "ComfyUI_00001_.png",

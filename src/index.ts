@@ -63,6 +63,18 @@ import {
   checkConnectionSchema,
   pingComfyUI,
 } from "./tools/health.js";
+import {
+  generateWithIPAdapter,
+  generateWithIPAdapterSchema,
+} from "./tools/ipadapter.js";
+import {
+  inpaint,
+  inpaintSchema,
+  outpaint,
+  outpaintSchema,
+  createMask,
+  createMaskSchema,
+} from "./tools/inpaint.js";
 
 // Configuration from environment
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
@@ -943,6 +955,256 @@ const TOOLS = [
     },
   },
   // ============================================================================
+  // IP-Adapter Tools
+  // ============================================================================
+  {
+    name: "generate_with_ipadapter",
+    description:
+      "Generate an image with IP-Adapter for identity preservation. Uses reference images to guide generation while maintaining character/style identity. Perfect for consistent character generation across multiple images.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "The positive prompt" },
+        negative_prompt: { type: "string", description: "The negative prompt" },
+        reference_image: {
+          type: "string",
+          description: "Filename of reference image in ComfyUI input folder for identity preservation",
+        },
+        reference_images: {
+          type: "array",
+          items: { type: "string" },
+          description: "Additional reference images for multi-reference generation",
+        },
+        weight: {
+          type: "number",
+          description: "IP-Adapter weight/strength (0.0-2.0, default 0.8)",
+          default: 0.8,
+        },
+        weight_type: {
+          type: "string",
+          enum: [
+            "linear",
+            "ease in",
+            "ease out",
+            "ease in-out",
+            "reverse in-out",
+            "weak input",
+            "weak output",
+            "weak middle",
+            "strong middle",
+          ],
+          description: "Weight application curve (default: linear)",
+        },
+        start_at: {
+          type: "number",
+          description: "When to start applying IP-Adapter (0.0-1.0, default: 0)",
+        },
+        end_at: {
+          type: "number",
+          description: "When to stop applying IP-Adapter (0.0-1.0, default: 1)",
+        },
+        combine_embeds: {
+          type: "string",
+          enum: ["concat", "add", "subtract", "average", "norm average"],
+          description: "How to combine multiple reference image embeddings",
+        },
+        ipadapter_model: {
+          type: "string",
+          description: "IP-Adapter model file (auto-detected if not specified)",
+        },
+        clip_vision_model: {
+          type: "string",
+          description: "CLIP Vision model for encoding reference images",
+        },
+        model: { type: "string", description: "Checkpoint model" },
+        width: { type: "number", default: 512 },
+        height: { type: "number", default: 768 },
+        steps: { type: "number", default: 28 },
+        cfg_scale: { type: "number", default: 7 },
+        sampler: { type: "string", default: "euler_ancestral" },
+        scheduler: { type: "string", default: "normal" },
+        seed: { type: "number" },
+        loras: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              strength_model: { type: "number" },
+              strength_clip: { type: "number" },
+            },
+            required: ["name"],
+          },
+        },
+        output_path: { type: "string", description: "Full path to save output" },
+        upload_to_cloud: {
+          type: "boolean",
+          description: "Upload result to cloud storage (default: true)",
+        },
+      },
+      required: ["prompt", "reference_image", "output_path"],
+    },
+  },
+  // ============================================================================
+  // Inpainting / Outpainting Tools
+  // ============================================================================
+  {
+    name: "inpaint",
+    description:
+      "Inpaint a masked region of an image. White areas in the mask are regenerated, black areas are preserved. Perfect for fixing hands, faces, or any specific region.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What to generate in the masked region" },
+        negative_prompt: { type: "string", description: "Things to avoid" },
+        source_image: {
+          type: "string",
+          description: "Source image filename in ComfyUI input folder",
+        },
+        mask_image: {
+          type: "string",
+          description: "Mask image filename (white = inpaint, black = keep)",
+        },
+        denoise_strength: {
+          type: "number",
+          description: "How much to change masked region (0.0-1.0, default: 0.75)",
+          default: 0.75,
+        },
+        model: { type: "string", description: "Checkpoint model" },
+        steps: { type: "number", default: 28 },
+        cfg_scale: { type: "number", default: 7 },
+        sampler: { type: "string", default: "euler_ancestral" },
+        scheduler: { type: "string", default: "normal" },
+        seed: { type: "number" },
+        loras: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              strength_model: { type: "number" },
+              strength_clip: { type: "number" },
+            },
+            required: ["name"],
+          },
+        },
+        output_path: { type: "string", description: "Full path to save output" },
+        upload_to_cloud: { type: "boolean", default: true },
+      },
+      required: ["prompt", "source_image", "mask_image", "output_path"],
+    },
+  },
+  {
+    name: "outpaint",
+    description:
+      "Extend image canvas and generate content for new regions. Uses ImagePadForOutpaint for seamless blending.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What to generate in extended regions" },
+        negative_prompt: { type: "string", description: "Things to avoid" },
+        source_image: {
+          type: "string",
+          description: "Source image filename in ComfyUI input folder",
+        },
+        extend_left: { type: "number", description: "Pixels to extend left", default: 0 },
+        extend_right: { type: "number", description: "Pixels to extend right", default: 0 },
+        extend_top: { type: "number", description: "Pixels to extend top", default: 0 },
+        extend_bottom: { type: "number", description: "Pixels to extend bottom", default: 0 },
+        feathering: {
+          type: "number",
+          description: "Blend feathering at edges (pixels, default: 40)",
+          default: 40,
+        },
+        denoise_strength: {
+          type: "number",
+          description: "Denoise strength (default: 0.8 for outpaint)",
+          default: 0.8,
+        },
+        model: { type: "string", description: "Checkpoint model" },
+        steps: { type: "number", default: 28 },
+        cfg_scale: { type: "number", default: 7 },
+        sampler: { type: "string", default: "euler_ancestral" },
+        scheduler: { type: "string", default: "normal" },
+        seed: { type: "number" },
+        loras: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              strength_model: { type: "number" },
+              strength_clip: { type: "number" },
+            },
+            required: ["name"],
+          },
+        },
+        output_path: { type: "string", description: "Full path to save output" },
+        upload_to_cloud: { type: "boolean", default: true },
+      },
+      required: ["prompt", "source_image", "output_path"],
+    },
+  },
+  {
+    name: "create_mask",
+    description:
+      "Generate a mask using AI segmentation (GroundingDINO + SAM). Supports presets (hands, face, eyes, body, background, foreground), custom text prompts, or manual rectangular regions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_image: {
+          type: "string",
+          description: "Source image filename in ComfyUI input folder",
+        },
+        preset: {
+          type: "string",
+          enum: ["hands", "face", "eyes", "body", "background", "foreground"],
+          description: "Auto-detect region using AI segmentation",
+        },
+        text_prompt: {
+          type: "string",
+          description: "Custom text prompt for segmentation (e.g., 'red shirt', 'cat')",
+        },
+        region: {
+          type: "object",
+          properties: {
+            x: { type: "number", description: "X position (0-100 percentage)" },
+            y: { type: "number", description: "Y position (0-100 percentage)" },
+            width: { type: "number", description: "Width (0-100 percentage)" },
+            height: { type: "number", description: "Height (0-100 percentage)" },
+          },
+          required: ["x", "y", "width", "height"],
+          description: "Manual rectangular region",
+        },
+        expand_pixels: {
+          type: "number",
+          description: "Expand mask by N pixels",
+          default: 0,
+        },
+        feather_pixels: {
+          type: "number",
+          description: "Feather/blur mask edges by N pixels",
+          default: 0,
+        },
+        invert: {
+          type: "boolean",
+          description: "Invert mask (swap white/black)",
+          default: false,
+        },
+        sam_model: { type: "string", description: "SAM model (default: sam_vit_h)" },
+        grounding_dino_model: { type: "string", description: "GroundingDINO model" },
+        threshold: {
+          type: "number",
+          description: "Detection threshold (0.0-1.0, default: 0.3)",
+          default: 0.3,
+        },
+        output_path: { type: "string", description: "Full path to save mask" },
+        upload_to_cloud: { type: "boolean", default: true },
+      },
+      required: ["source_image", "output_path"],
+    },
+  },
+  // ============================================================================
   // TTS Tools
   // ============================================================================
   {
@@ -1682,6 +1944,114 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const models = await listControlNetModels(client);
         return {
           content: [{ type: "text", text: JSON.stringify(models, null, 2) }],
+        };
+      }
+
+      // ====== IP-Adapter Tools ======
+      case "generate_with_ipadapter": {
+        const input = generateWithIPAdapterSchema.parse({
+          prompt: args?.prompt,
+          negative_prompt: args?.negative_prompt,
+          reference_image: args?.reference_image,
+          reference_images: args?.reference_images,
+          weight: args?.weight,
+          weight_type: args?.weight_type,
+          start_at: args?.start_at,
+          end_at: args?.end_at,
+          combine_embeds: args?.combine_embeds,
+          ipadapter_model: args?.ipadapter_model,
+          clip_vision_model: args?.clip_vision_model,
+          model: args?.model,
+          width: args?.width ?? 512,
+          height: args?.height ?? 768,
+          steps: args?.steps ?? 28,
+          cfg_scale: args?.cfg_scale ?? 7,
+          sampler: args?.sampler ?? "euler_ancestral",
+          scheduler: args?.scheduler ?? "normal",
+          seed: args?.seed,
+          loras: args?.loras,
+          output_path: args?.output_path,
+          upload_to_cloud: args?.upload_to_cloud,
+        });
+
+        const result = await generateWithIPAdapter(client, input, COMFYUI_MODEL);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // ====== Inpainting / Outpainting Tools ======
+      case "inpaint": {
+        const input = inpaintSchema.parse({
+          prompt: args?.prompt,
+          negative_prompt: args?.negative_prompt,
+          source_image: args?.source_image,
+          mask_image: args?.mask_image,
+          denoise_strength: args?.denoise_strength ?? 0.75,
+          model: args?.model,
+          steps: args?.steps ?? 28,
+          cfg_scale: args?.cfg_scale ?? 7,
+          sampler: args?.sampler ?? "euler_ancestral",
+          scheduler: args?.scheduler ?? "normal",
+          seed: args?.seed,
+          loras: args?.loras,
+          output_path: args?.output_path,
+          upload_to_cloud: args?.upload_to_cloud,
+        });
+
+        const result = await inpaint(client, input, COMFYUI_MODEL);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "outpaint": {
+        const input = outpaintSchema.parse({
+          prompt: args?.prompt,
+          negative_prompt: args?.negative_prompt,
+          source_image: args?.source_image,
+          extend_left: args?.extend_left ?? 0,
+          extend_right: args?.extend_right ?? 0,
+          extend_top: args?.extend_top ?? 0,
+          extend_bottom: args?.extend_bottom ?? 0,
+          feathering: args?.feathering ?? 40,
+          denoise_strength: args?.denoise_strength ?? 0.8,
+          model: args?.model,
+          steps: args?.steps ?? 28,
+          cfg_scale: args?.cfg_scale ?? 7,
+          sampler: args?.sampler ?? "euler_ancestral",
+          scheduler: args?.scheduler ?? "normal",
+          seed: args?.seed,
+          loras: args?.loras,
+          output_path: args?.output_path,
+          upload_to_cloud: args?.upload_to_cloud,
+        });
+
+        const result = await outpaint(client, input, COMFYUI_MODEL);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "create_mask": {
+        const input = createMaskSchema.parse({
+          source_image: args?.source_image,
+          preset: args?.preset,
+          text_prompt: args?.text_prompt,
+          region: args?.region,
+          expand_pixels: args?.expand_pixels ?? 0,
+          feather_pixels: args?.feather_pixels ?? 0,
+          invert: args?.invert ?? false,
+          sam_model: args?.sam_model,
+          grounding_dino_model: args?.grounding_dino_model,
+          threshold: args?.threshold ?? 0.3,
+          output_path: args?.output_path,
+          upload_to_cloud: args?.upload_to_cloud,
+        });
+
+        const result = await createMask(client, input);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
       }
 
