@@ -202,40 +202,62 @@ def supabase_enabled() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
 
-def upload_to_supabase(local_path: str, remote_path: str) -> dict:
+def _supabase_headers(content_type: str = "application/json") -> dict:
+    """Build auth headers for Supabase API (new sb_secret_ format needs both)."""
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": content_type,
+    }
+
+
+def _supabase_storage_url(path: str, prefix: str = "object") -> str:
+    """Build Supabase storage URL."""
+    return f"{SUPABASE_URL}/storage/v1/{prefix}/{SUPABASE_BUCKET}/{path}"
+
+
+def upload_to_supabase(local_path: str, remote_path: str, signed_url_expiry: int = 3600) -> dict:
     """
     Upload file to Supabase Storage and return URLs.
 
     Uses raw HTTP requests to avoid supabase-py dependency.
+    Includes basic retry logic for transient failures.
     """
     with open(local_path, "rb") as f:
         file_data = f.read()
 
-    # Guess content type
     content_type, _ = mimetypes.guess_type(local_path)
     if not content_type:
         content_type = "application/octet-stream"
 
-    # Upload via Supabase Storage API
-    upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{remote_path}"
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": content_type,
-        "x-upsert": "true"
-    }
+    # Upload with retry
+    upload_url = _supabase_storage_url(remote_path)
+    headers = {**_supabase_headers(content_type), "x-upsert": "true"}
 
-    response = requests.post(upload_url, headers=headers, data=file_data)
-    response.raise_for_status()
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = requests.post(upload_url, headers=headers, data=file_data, timeout=60)
+            response.raise_for_status()
+            break
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < 2 and getattr(e.response, 'status_code', 0) in [408, 429, 500, 502, 503, 504]:
+                import time
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                continue
+            raise Exception(f"Supabase upload failed: {e}") from e
 
     # Build URLs
-    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{remote_path}"
+    public_url = _supabase_storage_url(remote_path, prefix="object/public")
 
-    # Create signed URL (1 hour expiry)
-    sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_BUCKET}/{remote_path}"
+    # Create signed URL
+    sign_url = _supabase_storage_url(remote_path, prefix="object/sign")
     sign_response = requests.post(
         sign_url,
-        headers={"Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
-        json={"expiresIn": 3600}
+        headers=_supabase_headers(),
+        json={"expiresIn": signed_url_expiry},
+        timeout=10
     )
 
     signed_url = None
