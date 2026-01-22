@@ -73,6 +73,7 @@ import { sdxlArchitecture } from "./plugins/sdxl.js";
 import { ponyArchitecture } from "./plugins/pony.js";
 import { illustriousArchitecture } from "./plugins/illustrious.js";
 import { fluxArchitecture } from "./plugins/flux.js";
+import { zTurboArchitecture } from "./plugins/z-turbo.js";
 
 // Import the registry
 import { architectureRegistry } from "./registry.js";
@@ -84,6 +85,7 @@ architectureRegistry.register(sdxlArchitecture);
 architectureRegistry.register(ponyArchitecture);
 architectureRegistry.register(illustriousArchitecture);
 architectureRegistry.register(fluxArchitecture);
+architectureRegistry.register(zTurboArchitecture);
 
 // Export the singleton as the default way to access architectures
 export const architectures = architectureRegistry;
@@ -95,4 +97,5 @@ export {
   ponyArchitecture,
   illustriousArchitecture,
   fluxArchitecture,
+  zTurboArchitecture,
 };

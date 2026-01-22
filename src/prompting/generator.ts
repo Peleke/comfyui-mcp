@@ -13,6 +13,7 @@ import { FluxStrategy } from "./strategies/flux.js";
 import { SDXLStrategy } from "./strategies/sdxl.js";
 import { RealisticStrategy } from "./strategies/realistic.js";
 import { SD15Strategy } from "./strategies/sd15.js";
+import { ZTurboStrategy } from "./strategies/z-turbo.js";
 
 /**
  * Main prompt generator that orchestrates strategy selection and prompt creation
@@ -30,6 +31,7 @@ export class PromptGenerator {
     this.strategies.set("sdxl", new SDXLStrategy());
     this.strategies.set("realistic", new RealisticStrategy());
     this.strategies.set("sd15", new SD15Strategy());
+    this.strategies.set("z_image_turbo", new ZTurboStrategy());
   }
 
   /**
@@ -82,7 +84,7 @@ export class PromptGenerator {
       if (loraRecs.triggerWords.length > 0) {
         const triggerSection = loraRecs.triggerWords.join(", ");
         // Add to positive prompt (at the end for tag-based, integrated for natural language)
-        if (modelFamily === "flux" || modelFamily === "sdxl") {
+        if (modelFamily === "flux" || modelFamily === "sdxl" || modelFamily === "z_image_turbo") {
           result.positive = `${result.positive}. ${triggerSection}`;
         } else {
           result.positive = `${result.positive}, ${triggerSection}`;
@@ -254,6 +256,20 @@ export class PromptGenerator {
         ],
         examplePrompt:
           "masterpiece, best quality, high resolution, detailed, 1girl, silver hair, blue eyes, school uniform, classroom, soft lighting",
+      },
+      z_image_turbo: {
+        name: "Z-Image Turbo",
+        tips: [
+          "Natural language prompts (100-300 words optimal)",
+          "NO negative prompts (completely ignored by model)",
+          "CFG is ignored (set to 1.0)",
+          "8 steps optimal (turbo distillation)",
+          "Excellent text rendering - put text in quotes",
+          "Lighting descriptions have HIGH impact",
+          "Resolution must be divisible by 32",
+        ],
+        examplePrompt:
+          "A young woman with silver hair and piercing blue eyes, wearing a traditional school uniform with a navy blazer and pleated skirt. She stands in a sunlit classroom, warm afternoon light streaming through large windows and casting soft shadows. Her expression is thoughtful, gazing directly at the viewer with a subtle smile. Professional photography quality, sharp focus, shallow depth of field with bokeh background, correct human anatomy.",
       },
     };
 

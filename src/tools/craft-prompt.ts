@@ -19,7 +19,7 @@ export const craftPromptSchema = z.object({
     .optional()
     .describe("Model name for auto-detection of prompting strategy"),
   model_family: z
-    .enum(["illustrious", "pony", "sdxl", "flux", "sd15", "realistic"])
+    .enum(["illustrious", "pony", "sdxl", "flux", "sd15", "realistic", "z_image_turbo"])
     .optional()
     .describe("Explicit model family (overrides auto-detection)"),
   style: z

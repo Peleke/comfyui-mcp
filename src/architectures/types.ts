@@ -9,7 +9,7 @@
 /**
  * Supported architecture identifiers
  */
-export type ArchitectureId = "sd15" | "sdxl" | "flux" | "sd3" | "pony" | "illustrious";
+export type ArchitectureId = "sd15" | "sdxl" | "flux" | "sd3" | "pony" | "illustrious" | "z_image_turbo";
 
 /**
  * ControlNet types supported by the system
