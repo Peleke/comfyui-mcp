@@ -78,11 +78,13 @@ import {
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
 const COMFYUI_MODEL = process.env.COMFYUI_MODEL || "";
 const COMFYUI_OUTPUT_DIR = process.env.COMFYUI_OUTPUT_DIR || "/tmp/comfyui-output";
+const COMFYUI_INPUT_DIR = process.env.COMFYUI_INPUT_DIR || "/tmp/comfyui-input";
 
 // Initialize client
 const client = new ComfyUIClient({
   url: COMFYUI_URL,
   outputDir: COMFYUI_OUTPUT_DIR,
+  inputDir: COMFYUI_INPUT_DIR,
 });
 
 // Tool definitions

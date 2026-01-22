@@ -38,11 +38,13 @@
     "@upstash/redis": "^1.36.1",
     "hono": "^4.11.3",
     "quirrel": "^1.14.1",
+    "sharp": "^0.34.5",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/sharp": "^0.31.1",
     "@types/ws": "^8.5.13",
     "@vitest/coverage-v8": "^4.0.16",
     "tsx": "^4.19.0",

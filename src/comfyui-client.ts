@@ -3,6 +3,8 @@ import WebSocket from "ws";
 export interface ComfyUIConfig {
   url: string;
   outputDir?: string;
+  /** ComfyUI input directory for control images */
+  inputDir?: string;
   /** Generation timeout in milliseconds (default: 10 minutes) */
   timeout?: number;
 }
@@ -72,13 +74,20 @@ export class ComfyUIClient {
   private baseUrl: string;
   private wsUrl: string;
   public outputDir: string;
+  public inputDir: string;
   private timeout: number;
 
   constructor(config: ComfyUIConfig) {
     this.baseUrl = config.url.replace(/\/$/, "");
     this.wsUrl = this.baseUrl.replace(/^http/, "ws");
     this.outputDir = config.outputDir || "/tmp/comfyui-output";
+    this.inputDir = config.inputDir || "/tmp/comfyui-input";
     this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
+  }
+
+  /** Get the ComfyUI input directory for control images */
+  getInputDir(): string {
+    return this.inputDir;
   }
 
   async queuePrompt(workflow: any, clientId?: string): Promise<QueuePromptResponse> {
