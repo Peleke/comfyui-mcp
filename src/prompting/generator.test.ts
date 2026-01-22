@@ -240,6 +240,132 @@ describe("PromptGenerator", () => {
     });
   });
 
+  describe("Z-Image Turbo strategy", () => {
+    it("should use natural language prompts (expanded from input)", () => {
+      const result = generator.generate({
+        description: "a sunset over mountains",
+        modelFamily: "z_image_turbo",
+      });
+
+      // Z-Image expands prompts with quality and technical details
+      // Should be prose, not tags
+      expect(result.positive).not.toContain("1girl");
+      expect(result.positive).not.toContain("score_9");
+      // Should contain the original subject
+      expect(result.positive.toLowerCase()).toContain("sunset");
+      expect(result.positive.toLowerCase()).toContain("mountain");
+    });
+
+    it("should expand prompts with quality markers", () => {
+      const result = generator.generate({
+        description: "a professional portrait",
+        modelFamily: "z_image_turbo",
+      });
+
+      // Z-Image prompts should be prose with quality markers
+      const lower = result.positive.toLowerCase();
+      const hasQualityMarkers =
+        lower.includes("detail") ||
+        lower.includes("quality") ||
+        lower.includes("sharp") ||
+        lower.includes("professional");
+      expect(hasQualityMarkers).toBe(true);
+    });
+
+    it("should NOT have negative prompt", () => {
+      const result = generator.generate({
+        description: "a portrait",
+        modelFamily: "z_image_turbo",
+      });
+
+      // Z-Image ignores negative prompts completely
+      expect(result.negative).toBe("");
+    });
+
+    it("should recommend CFG of 1.0", () => {
+      const result = generator.generate({
+        description: "test",
+        modelFamily: "z_image_turbo",
+      });
+
+      expect(result.recommendedSettings.cfgScale).toBe(1);
+    });
+
+    it("should recommend 8 steps", () => {
+      const result = generator.generate({
+        description: "test",
+        modelFamily: "z_image_turbo",
+      });
+
+      expect(result.recommendedSettings.steps).toBe(8);
+    });
+
+    it("should recommend euler sampler with simple scheduler", () => {
+      const result = generator.generate({
+        description: "test",
+        modelFamily: "z_image_turbo",
+      });
+
+      expect(result.recommendedSettings.sampler).toBe("euler");
+      expect(result.recommendedSettings.scheduler).toBe("simple");
+    });
+
+    it("should convert danbooru tags to natural language", () => {
+      const result = generator.generate({
+        description: "1girl, solo, blue_eyes, long_hair, smile",
+        modelFamily: "z_image_turbo",
+      });
+
+      // Should convert tags to prose
+      expect(result.positive.toLowerCase()).toContain("woman");
+      expect(result.positive.toLowerCase()).toContain("blue");
+      expect(result.positive.toLowerCase()).toContain("eyes");
+      // Should NOT keep tag format
+      expect(result.positive).not.toContain("1girl");
+      expect(result.positive).not.toContain("blue_eyes");
+    });
+
+    it("should include lighting descriptions", () => {
+      const result = generator.generate({
+        description: "a portrait with dramatic lighting",
+        modelFamily: "z_image_turbo",
+        style: "cinematic",
+      });
+
+      // Z-Image responds strongly to lighting
+      const lower = result.positive.toLowerCase();
+      const hasLighting =
+        lower.includes("light") ||
+        lower.includes("shadow") ||
+        lower.includes("illuminat");
+      expect(hasLighting).toBe(true);
+    });
+
+    it("should include technical quality markers", () => {
+      const result = generator.generate({
+        description: "a landscape",
+        modelFamily: "z_image_turbo",
+      });
+
+      const lower = result.positive.toLowerCase();
+      const hasQuality =
+        lower.includes("quality") ||
+        lower.includes("detail") ||
+        lower.includes("sharp") ||
+        lower.includes("professional");
+      expect(hasQuality).toBe(true);
+    });
+
+    it("should auto-detect z_image model names", () => {
+      const result = generator.generate({
+        description: "a portrait",
+        modelName: "z_image_turbo_bf16.safetensors",
+      });
+
+      expect(result.modelFamily).toBe("z_image_turbo");
+    });
+  });
+
   describe("getSupportedFamilies", () => {
     it("should return all supported model families", () => {
       const families = generator.getSupportedFamilies();
@@ -250,6 +376,7 @@ describe("PromptGenerator", () => {
       expect(families).toContain("sdxl");
       expect(families).toContain("realistic");
       expect(families).toContain("sd15");
+      expect(families).toContain("z_image_turbo");
     });
   });
 

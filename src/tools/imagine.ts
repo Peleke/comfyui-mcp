@@ -50,7 +50,7 @@ export const imagineSchema = z.object({
     .optional()
     .describe("Checkpoint model to use. If not specified, uses COMFYUI_MODEL env var"),
   model_family: z
-    .enum(["illustrious", "pony", "sdxl", "flux", "sd15", "realistic"])
+    .enum(["illustrious", "pony", "sdxl", "flux", "sd15", "realistic", "z_image_turbo"])
     .optional()
     .describe(
       "Model family for prompt optimization. Auto-detected from model name if not specified"
@@ -207,6 +207,7 @@ function applyQualityPreset(
     pony: { draft: 15, standard: 28, high: 40, ultra: 50 },
     realistic: { draft: 20, standard: 30, high: 45, ultra: 60 },
     sd15: { draft: 15, standard: 25, high: 35, ultra: 50 },
+    z_image_turbo: { draft: 4, standard: 8, high: 10, ultra: 12 }, // Turbo model optimized for 8 steps
   };
 
   const steps = input.steps ?? baseSteps[modelFamily][quality];

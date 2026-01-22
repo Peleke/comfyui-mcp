@@ -328,7 +328,7 @@ const TOOLS = [
         },
         model_family: {
           type: "string",
-          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic"],
+          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic", "z_image_turbo"],
           description: "Explicit model family (overrides auto-detection)",
         },
         style: {
@@ -392,7 +392,7 @@ const TOOLS = [
       properties: {
         model_family: {
           type: "string",
-          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic"],
+          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic", "z_image_turbo"],
           description: "The model family to get prompting tips for",
         },
       },
@@ -533,7 +533,7 @@ const TOOLS = [
         },
         model_family: {
           type: "string",
-          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic"],
+          enum: ["illustrious", "pony", "sdxl", "flux", "sd15", "realistic", "z_image_turbo"],
           description: "Model family for prompt optimization. Auto-detected from model name if not specified",
         },
         style: {

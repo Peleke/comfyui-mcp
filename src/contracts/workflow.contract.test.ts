@@ -25,6 +25,9 @@ import {
   buildIPAdapterWorkflow,
   buildTTSWorkflow,
   buildLipSyncWorkflow,
+  buildZTurboTxt2ImgWorkflow,
+  buildZTurboImg2ImgWorkflow,
+  isZImageTurboModel,
 } from "../workflows/builder.js";
 
 let schema: ComfyUIObjectInfo;
@@ -827,5 +830,274 @@ describe("Contract: Schema edge cases", () => {
     const result = validateWorkflow(workflow, schema);
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.message.includes("above maximum"))).toBe(true);
+  });
+});
+
+// ============================================================================
+// Z-Image Turbo Workflow Contract Tests
+// ============================================================================
+
+describe("Contract: buildZTurboTxt2ImgWorkflow", () => {
+  // Note: Z-Image Turbo uses newer nodes (UNETLoader, CLIPLoader, VAELoader, EmptySD3LatentImage)
+  // that may not be in the bundled schema. We use allowUnknownNodes: true for these tests.
+
+  it("produces valid workflow with minimal params", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "A professional headshot photograph of an adult woman in her early thirties.",
+      width: 768,
+      height: 1024,
+    });
+
+    const result = validateWorkflow(workflow, schema, { allowUnknownNodes: true });
+    expectValid(result);
+  });
+
+  it("produces valid workflow with all params", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "A mystical forest at twilight with glowing mushrooms and ethereal lighting.",
+      width: 1024,
+      height: 768,
+      steps: 8,
+      cfgScale: 1.0,
+      sampler: "euler",
+      scheduler: "simple",
+      seed: 42,
+      filenamePrefix: "zturbo_test",
+      unetModel: "z_image_turbo_bf16.safetensors",
+      clipModel: "qwen_3_4b.safetensors",
+      vaeModel: "ae.safetensors",
+      loras: [
+        { name: "RetroPop01a_CE_ZIMGT_AIT5k.safetensors", strength_model: 0.5, strength_clip: 0.5 },
+      ],
+    });
+
+    const result = validateWorkflow(workflow, schema, { allowUnknownNodes: true });
+    expectValid(result);
+  });
+
+  it("has correct Z-Image Turbo node types (NOT CheckpointLoaderSimple)", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      width: 768,
+      height: 1024,
+    });
+
+    const nodeTypes = Object.values(workflow).map((n: any) => n.class_type);
+
+    // Z-Image Turbo uses separate loaders (NOT CheckpointLoaderSimple)
+    expect(nodeTypes).toContain("UNETLoader");
+    expect(nodeTypes).toContain("CLIPLoader");
+    expect(nodeTypes).toContain("VAELoader");
+    expect(nodeTypes).not.toContain("CheckpointLoaderSimple");
+
+    // Uses SD3 latent format
+    expect(nodeTypes).toContain("EmptySD3LatentImage");
+    expect(nodeTypes).not.toContain("EmptyLatentImage");
+
+    // Standard nodes still present
+    expect(nodeTypes).toContain("KSampler");
+    expect(nodeTypes).toContain("CLIPTextEncode");
+    expect(nodeTypes).toContain("VAEDecode");
+    expect(nodeTypes).toContain("SaveImage");
+  });
+
+  it("uses lumina2 CLIP type", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      width: 768,
+      height: 1024,
+    });
+
+    // Find CLIPLoader node and verify lumina2 type
+    const clipNode = Object.values(workflow).find(
+      (n: any) => n.class_type === "CLIPLoader"
+    );
+    expect(clipNode).toBeDefined();
+    expect((clipNode as any).inputs.type).toBe("lumina2");
+  });
+
+  it("forces CFG to 1.0 regardless of input", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      width: 768,
+      height: 1024,
+      cfgScale: 7.5, // User tries to set CFG
+    });
+
+    // Find KSampler and verify CFG is 1.0
+    const ksampler = Object.values(workflow).find(
+      (n: any) => n.class_type === "KSampler"
+    );
+    expect(ksampler).toBeDefined();
+    expect((ksampler as any).inputs.cfg).toBe(1.0);
+  });
+
+  it("uses empty negative prompt", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      negativePrompt: "bad quality, blurry", // User tries to set negative
+      width: 768,
+      height: 1024,
+    });
+
+    // Find negative text encoder (node 6) and verify empty text
+    expect(workflow["6"]).toBeDefined();
+    expect(workflow["6"].inputs.text).toBe("");
+  });
+
+  it("defaults to 8 steps for turbo distillation", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      width: 768,
+      height: 1024,
+    });
+
+    const ksampler = Object.values(workflow).find(
+      (n: any) => n.class_type === "KSampler"
+    );
+    expect((ksampler as any).inputs.steps).toBe(8);
+  });
+
+  it("correctly wires LoRAs into Z-Turbo workflow", () => {
+    const workflow = buildZTurboTxt2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      width: 768,
+      height: 1024,
+      loras: [
+        { name: "lora1.safetensors", strength_model: 0.5, strength_clip: 0.5 },
+        { name: "lora2.safetensors", strength_model: 0.3, strength_clip: 0.3 },
+      ],
+    });
+
+    const result = validateWorkflow(workflow, schema, { allowUnknownNodes: true });
+    expectValid(result);
+
+    // Should have LoRA nodes
+    const nodeTypes = Object.values(workflow).map((n: any) => n.class_type);
+    expect(nodeTypes.filter((t) => t === "LoraLoader").length).toBe(2);
+
+    // First LoRA should connect to UNETLoader and CLIPLoader outputs
+    const firstLora = workflow["lora_0"];
+    expect(firstLora).toBeDefined();
+    expect(firstLora.inputs.model[0]).toBe("1"); // UNETLoader
+    expect(firstLora.inputs.clip[0]).toBe("2"); // CLIPLoader
+  });
+});
+
+describe("Contract: buildZTurboImg2ImgWorkflow", () => {
+  // Note: Z-Image Turbo uses newer nodes that may not be in the bundled schema
+
+  it("produces valid workflow with minimal params", () => {
+    const workflow = buildZTurboImg2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "enhanced version with more detail",
+      inputImage: "input.png",
+      denoise: 0.5,
+    });
+
+    const result = validateWorkflow(workflow, schema, { allowUnknownNodes: true });
+    expectValid(result);
+  });
+
+  it("has correct Z-Image Turbo img2img node types", () => {
+    const workflow = buildZTurboImg2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      inputImage: "input.png",
+      denoise: 0.5,
+    });
+
+    const nodeTypes = Object.values(workflow).map((n: any) => n.class_type);
+
+    // Z-Image Turbo uses separate loaders
+    expect(nodeTypes).toContain("UNETLoader");
+    expect(nodeTypes).toContain("CLIPLoader");
+    expect(nodeTypes).toContain("VAELoader");
+    expect(nodeTypes).not.toContain("CheckpointLoaderSimple");
+
+    // Img2img specific
+    expect(nodeTypes).toContain("LoadImage");
+    expect(nodeTypes).toContain("VAEEncode");
+    expect(nodeTypes).toContain("KSampler");
+    expect(nodeTypes).toContain("VAEDecode");
+    expect(nodeTypes).toContain("SaveImage");
+  });
+
+  it("uses lumina2 CLIP type in img2img", () => {
+    const workflow = buildZTurboImg2ImgWorkflow({
+      model: "z_image_turbo_bf16.safetensors",
+      prompt: "test",
+      inputImage: "input.png",
+      denoise: 0.5,
+    });
+
+    const clipNode = Object.values(workflow).find(
+      (n: any) => n.class_type === "CLIPLoader"
+    );
+    expect(clipNode).toBeDefined();
+    expect((clipNode as any).inputs.type).toBe("lumina2");
+  });
+
+  it("validates denoise range", () => {
+    for (const denoise of [0.1, 0.3, 0.5, 0.7]) {
+      const workflow = buildZTurboImg2ImgWorkflow({
+        model: "z_image_turbo_bf16.safetensors",
+        prompt: "test",
+        inputImage: "input.png",
+        denoise,
+      });
+      const result = validateWorkflow(workflow, schema, { allowUnknownNodes: true });
+      expectValid(result);
+    }
+  });
+});
+
+describe("Contract: isZImageTurboModel", () => {
+  it("detects z_image pattern", () => {
+    expect(isZImageTurboModel("z_image_turbo_bf16.safetensors")).toBe(true);
+    expect(isZImageTurboModel("z_image_turbo.safetensors")).toBe(true);
+    expect(isZImageTurboModel("z_image.gguf")).toBe(true);
+  });
+
+  it("detects z-image pattern (hyphenated)", () => {
+    expect(isZImageTurboModel("z-image-turbo.safetensors")).toBe(true);
+    expect(isZImageTurboModel("z-image_v2.safetensors")).toBe(true);
+  });
+
+  it("detects zimage pattern (no separator)", () => {
+    expect(isZImageTurboModel("zImageTurbo.safetensors")).toBe(true);
+    expect(isZImageTurboModel("zimageturbo_bf16.safetensors")).toBe(true);
+  });
+
+  it("detects zimgt LoRA naming convention", () => {
+    expect(isZImageTurboModel("RetroPop01a_CE_ZIMGT_AIT5k.safetensors")).toBe(true);
+    expect(isZImageTurboModel("ClayArt01a_CE_ZIMGT_AIT4k.safetensors")).toBe(true);
+  });
+
+  it("detects lumina turbo pattern", () => {
+    expect(isZImageTurboModel("lumina2_turbo.safetensors")).toBe(true);
+    expect(isZImageTurboModel("lumina_turbo_v3.safetensors")).toBe(true);
+  });
+
+  it("detects Copax TimeLess Z variant", () => {
+    expect(isZImageTurboModel("copax_timeless_z.safetensors")).toBe(true);
+    expect(isZImageTurboModel("Copax_TimeLess_XPlus-Z.safetensors")).toBe(true);
+  });
+
+  it("does NOT detect non-Z-Image models", () => {
+    expect(isZImageTurboModel("sdxl_base.safetensors")).toBe(false);
+    expect(isZImageTurboModel("flux1-schnell-fp8.safetensors")).toBe(false);
+    expect(isZImageTurboModel("novaFurryXL_v13.safetensors")).toBe(false);
+    expect(isZImageTurboModel("illustrious_v1.safetensors")).toBe(false);
+    expect(isZImageTurboModel("ponyDiffusion_v6.safetensors")).toBe(false);
+    expect(isZImageTurboModel("cyberrealistic_v40.safetensors")).toBe(false);
   });
 });

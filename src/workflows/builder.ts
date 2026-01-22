@@ -1360,3 +1360,348 @@ export function buildTalkingAvatarWorkflow(params: {
 
   return workflow;
 }
+
+// ============================================================================
+// Z-Image Turbo Support
+// ============================================================================
+
+/**
+ * Z-Image Turbo uses a completely different architecture:
+ * - UNETLoader instead of CheckpointLoaderSimple
+ * - CLIPLoader with type: "lumina2" (Qwen 3 4B text encoder)
+ * - VAELoader separately
+ * - EmptySD3LatentImage (SD3 latent format)
+ * - NO negative prompts (model ignores them completely)
+ * - CFG fixed at 1.0 (any other value ignored)
+ * - 8-step turbo distillation
+ */
+
+/**
+ * Check if a model name indicates a Z-Image Turbo model
+ */
+export function isZImageTurboModel(modelName: string): boolean {
+  const lowerName = modelName.toLowerCase();
+  return (
+    lowerName.includes("z_image") ||
+    lowerName.includes("z-image") ||
+    lowerName.includes("zimage") ||
+    lowerName.includes("zimgt") ||
+    (lowerName.includes("lumina") && lowerName.includes("turbo")) ||
+    (lowerName.includes("copax") && lowerName.includes("timeless") && lowerName.includes("z"))
+  );
+}
+
+export interface ZTurboParams extends Txt2ImgParams {
+  // Z-Image uses separate model files
+  unetModel?: string;       // Default: derived from model name or z_image_turbo_bf16.safetensors
+  clipModel?: string;       // Default: qwen_3_4b.safetensors
+  vaeModel?: string;        // Default: ae.safetensors
+}
+
+/**
+ * Inject LoRA loaders for Z-Image Turbo (separate UNET/CLIP loaders)
+ * LoRAs connect after the UNETLoader and CLIPLoader outputs
+ */
+function injectZTurboLoras(
+  workflow: Record<string, any>,
+  loras: LoraConfig[],
+  unetNodeId: string,
+  clipNodeId: string,
+  modelConsumerNodeId: string,
+  clipConsumerNodeIds: string[]
+): Record<string, any> {
+  if (!loras || loras.length === 0) {
+    return workflow;
+  }
+
+  // Z-Image Turbo: UNETLoader outputs only MODEL on slot 0
+  // CLIPLoader outputs only CLIP on slot 0
+  let currentModelSource: [string, number] = [unetNodeId, 0];
+  let currentClipSource: [string, number] = [clipNodeId, 0];
+
+  // Add LoRA loader nodes
+  loras.forEach((lora, index) => {
+    const loraNodeId = `lora_${index}`;
+
+    workflow[loraNodeId] = {
+      class_type: "LoraLoader",
+      inputs: {
+        lora_name: lora.name,
+        strength_model: lora.strength_model ?? 1.0,
+        strength_clip: lora.strength_clip ?? 1.0,
+        model: currentModelSource,
+        clip: currentClipSource,
+      },
+    };
+
+    // Update sources for next LoRA or final consumers
+    currentModelSource = [loraNodeId, 0];
+    currentClipSource = [loraNodeId, 1];
+  });
+
+  // Rewire model consumer (KSampler)
+  if (workflow[modelConsumerNodeId]) {
+    workflow[modelConsumerNodeId].inputs.model = currentModelSource;
+  }
+
+  // Rewire CLIP consumers (text encoders)
+  clipConsumerNodeIds.forEach((nodeId) => {
+    if (workflow[nodeId]) {
+      workflow[nodeId].inputs.clip = currentClipSource;
+    }
+  });
+
+  return workflow;
+}
+
+/**
+ * Build a txt2img workflow for Z-Image Turbo
+ *
+ * Uses:
+ * - UNETLoader (for the diffusion model)
+ * - CLIPLoader with type: "lumina2" (Qwen 3 4B text encoder)
+ * - VAELoader (separate VAE)
+ * - EmptySD3LatentImage (SD3 latent format)
+ */
+export function buildZTurboTxt2ImgWorkflow(params: ZTurboParams): Record<string, any> {
+  const workflow: Record<string, any> = {};
+
+  // Derive model files from model name or use defaults
+  const unetModel = params.unetModel || params.model || "z_image_turbo_bf16.safetensors";
+  const clipModel = params.clipModel || "qwen_3_4b.safetensors";
+  const vaeModel = params.vaeModel || "ae.safetensors";
+
+  // Node 1: UNETLoader - loads the diffusion model
+  workflow["1"] = {
+    class_type: "UNETLoader",
+    inputs: {
+      unet_name: unetModel,
+      weight_dtype: "default",
+    },
+  };
+
+  // Node 2: CLIPLoader - Qwen 3 4B with lumina2 type (CRITICAL!)
+  workflow["2"] = {
+    class_type: "CLIPLoader",
+    inputs: {
+      clip_name: clipModel,
+      type: "lumina2", // CRITICAL: Must be lumina2 for Z-Image Turbo
+    },
+  };
+
+  // Node 3: VAELoader
+  workflow["3"] = {
+    class_type: "VAELoader",
+    inputs: {
+      vae_name: vaeModel,
+    },
+  };
+
+  // Node 4: EmptySD3LatentImage (Z-Image uses SD3 latent format)
+  workflow["4"] = {
+    class_type: "EmptySD3LatentImage",
+    inputs: {
+      width: params.width || 768,
+      height: params.height || 1024,
+      batch_size: 1,
+    },
+  };
+
+  // Node 5: Positive prompt (CLIPTextEncode)
+  workflow["5"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["2", 0], // From CLIPLoader
+      text: params.prompt,
+    },
+  };
+
+  // Node 6: Negative prompt (empty - Z-Image ignores negative prompts)
+  // We still need the node for KSampler, but it's effectively empty
+  workflow["6"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["2", 0], // From CLIPLoader
+      text: "", // Empty - Z-Image Turbo ignores negative prompts
+    },
+  };
+
+  // Node 7: KSampler
+  workflow["7"] = {
+    class_type: "KSampler",
+    inputs: {
+      model: ["1", 0], // From UNETLoader
+      positive: ["5", 0],
+      negative: ["6", 0],
+      latent_image: ["4", 0],
+      seed: params.seed ?? Math.floor(Math.random() * 2147483647),
+      steps: params.steps || 8, // Z-Image Turbo: 8 steps optimal
+      cfg: 1.0, // FIXED: Z-Image ignores CFG, always use 1.0
+      sampler_name: params.sampler || "euler",
+      scheduler: params.scheduler || "simple",
+      denoise: 1.0,
+    },
+  };
+
+  // Node 8: VAEDecode
+  workflow["8"] = {
+    class_type: "VAEDecode",
+    inputs: {
+      samples: ["7", 0],
+      vae: ["3", 0], // From VAELoader
+    },
+  };
+
+  // Node 9: SaveImage
+  workflow["9"] = {
+    class_type: "SaveImage",
+    inputs: {
+      filename_prefix: params.filenamePrefix || "ComfyUI_ZTurbo",
+      images: ["8", 0],
+    },
+  };
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    return injectZTurboLoras(
+      workflow,
+      params.loras,
+      "1", // UNETLoader node
+      "2", // CLIPLoader node
+      "7", // KSampler node (model consumer)
+      ["5", "6"] // CLIP consumers (positive/negative text encoders)
+    );
+  }
+
+  return workflow;
+}
+
+export interface ZTurboImg2ImgParams extends BaseSamplerParams {
+  inputImage: string;
+  denoise?: number;
+  unetModel?: string;
+  clipModel?: string;
+  vaeModel?: string;
+}
+
+/**
+ * Build an img2img workflow for Z-Image Turbo (for hi-res fix support)
+ */
+export function buildZTurboImg2ImgWorkflow(params: ZTurboImg2ImgParams): Record<string, any> {
+  const workflow: Record<string, any> = {};
+
+  // Derive model files from model name or use defaults
+  const unetModel = params.unetModel || params.model || "z_image_turbo_bf16.safetensors";
+  const clipModel = params.clipModel || "qwen_3_4b.safetensors";
+  const vaeModel = params.vaeModel || "ae.safetensors";
+
+  // Node 1: LoadImage
+  workflow["1"] = {
+    class_type: "LoadImage",
+    inputs: {
+      image: params.inputImage,
+    },
+  };
+
+  // Node 2: UNETLoader
+  workflow["2"] = {
+    class_type: "UNETLoader",
+    inputs: {
+      unet_name: unetModel,
+      weight_dtype: "default",
+    },
+  };
+
+  // Node 3: CLIPLoader with lumina2 type
+  workflow["3"] = {
+    class_type: "CLIPLoader",
+    inputs: {
+      clip_name: clipModel,
+      type: "lumina2",
+    },
+  };
+
+  // Node 4: VAELoader
+  workflow["4"] = {
+    class_type: "VAELoader",
+    inputs: {
+      vae_name: vaeModel,
+    },
+  };
+
+  // Node 5: VAEEncode (encode input image to latent)
+  workflow["5"] = {
+    class_type: "VAEEncode",
+    inputs: {
+      pixels: ["1", 0],
+      vae: ["4", 0],
+    },
+  };
+
+  // Node 6: Positive prompt
+  workflow["6"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 0],
+      text: params.prompt,
+    },
+  };
+
+  // Node 7: Negative prompt (empty)
+  workflow["7"] = {
+    class_type: "CLIPTextEncode",
+    inputs: {
+      clip: ["3", 0],
+      text: "",
+    },
+  };
+
+  // Node 8: KSampler
+  workflow["8"] = {
+    class_type: "KSampler",
+    inputs: {
+      model: ["2", 0],
+      positive: ["6", 0],
+      negative: ["7", 0],
+      latent_image: ["5", 0],
+      seed: params.seed ?? Math.floor(Math.random() * 2147483647),
+      steps: params.steps || 8,
+      cfg: 1.0, // Fixed for Z-Image
+      sampler_name: params.sampler || "euler",
+      scheduler: params.scheduler || "simple",
+      denoise: params.denoise ?? 0.5, // Lower denoise for img2img
+    },
+  };
+
+  // Node 9: VAEDecode
+  workflow["9"] = {
+    class_type: "VAEDecode",
+    inputs: {
+      samples: ["8", 0],
+      vae: ["4", 0],
+    },
+  };
+
+  // Node 10: SaveImage
+  workflow["10"] = {
+    class_type: "SaveImage",
+    inputs: {
+      filename_prefix: params.filenamePrefix || "ComfyUI_ZTurbo_img2img",
+      images: ["9", 0],
+    },
+  };
+
+  // Inject LoRAs if specified
+  if (params.loras && params.loras.length > 0) {
+    return injectZTurboLoras(
+      workflow,
+      params.loras,
+      "2", // UNETLoader
+      "3", // CLIPLoader
+      "8", // KSampler
+      ["6", "7"] // Text encoders
+    );
+  }
+
+  return workflow;
+}

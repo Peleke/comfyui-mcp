@@ -17,6 +17,7 @@ const ARCHITECTURE_TO_FAMILY: Record<ArchitectureId, ModelFamily> = {
   sd3: "sdxl",  // SD3 uses similar prompting to SDXL for now
   pony: "pony",
   illustrious: "illustrious",
+  z_image_turbo: "z_image_turbo",
 };
 
 /**
@@ -102,6 +103,7 @@ export function getStrategyName(family: ModelFamily): string {
     flux: "Flux (Natural language, no negatives)",
     sd15: "SD 1.5 (Tag-based, comma-separated)",
     realistic: "Realistic/Photo (Camera terms, technical)",
+    z_image_turbo: "Z-Image Turbo (Natural language, NO negatives, 8 steps)",
   };
   return names[family];
 }

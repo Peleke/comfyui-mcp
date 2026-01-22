@@ -2,12 +2,13 @@
  * Model families supported by the prompt engineering system
  */
 export type ModelFamily =
-  | "illustrious"  // Illustrious XL, NovelAI-style
-  | "pony"         // Pony Diffusion, score tags
-  | "sdxl"         // Standard SDXL
-  | "flux"         // Flux models (natural language)
-  | "sd15"         // SD 1.5 (tag-based)
-  | "realistic";   // Realistic photo models
+  | "illustrious"    // Illustrious XL, NovelAI-style
+  | "pony"           // Pony Diffusion, score tags
+  | "sdxl"           // Standard SDXL
+  | "flux"           // Flux models (natural language)
+  | "sd15"           // SD 1.5 (tag-based)
+  | "realistic"      // Realistic photo models
+  | "z_image_turbo"; // Z-Image Turbo (6B DiT, natural language, NO negative prompts)
 
 /**
  * Content rating for the generation
