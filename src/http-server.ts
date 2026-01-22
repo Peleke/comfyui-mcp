@@ -65,6 +65,7 @@ import {
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://localhost:8188";
 const COMFYUI_MODEL = process.env.COMFYUI_MODEL || "";
 const OUTPUT_DIR = process.env.COMFYUI_OUTPUT_DIR || "/tmp/comfyui-output";
+const INPUT_DIR = process.env.COMFYUI_INPUT_DIR || "/tmp/comfyui-input";
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const NODE_ENV = process.env.NODE_ENV || "development";
 
@@ -75,6 +76,7 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS?.split(",") || ["*"];
 export const client = new ComfyUIClient({
   url: COMFYUI_URL,
   outputDir: OUTPUT_DIR,
+  inputDir: INPUT_DIR,
 });
 
 // Initialize middleware

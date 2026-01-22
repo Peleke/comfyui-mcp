@@ -9,9 +9,10 @@ import {
   PreprocessorOptions,
   LoraConfig,
 } from "../workflows/builder.js";
-import { mkdir } from "fs/promises";
-import { dirname } from "path";
+import { mkdir, writeFile, readFile } from "fs/promises";
+import { dirname, join, basename } from "path";
 import { architectures } from "../architectures/index.js";
+import sharp from "sharp";
 
 // ============================================================================
 // ControlNet Model Selection (Architecture-Aware)
@@ -150,7 +151,13 @@ export const preprocessControlImageSchema = z.object({
 export const generateWithHiddenImageSchema = z.object({
   prompt: z.string().describe("The positive prompt for the visible image"),
   negative_prompt: z.string().optional(),
-  hidden_image: z.string().describe("Filename of high-contrast B&W image to hide"),
+  hidden_image: z.string().describe("Filename of image to hide (in ComfyUI input folder)"),
+  convert_to_bw: z.boolean().optional().default(false)
+    .describe("Auto-convert the hidden image to high-contrast B&W before use"),
+  bw_threshold: z.number().min(0).max(255).optional().default(128)
+    .describe("Threshold for B&W conversion (0-255). Pixels above this become white, below become black"),
+  bw_invert: z.boolean().optional().default(false)
+    .describe("Invert the B&W result (swap black and white)"),
   visibility: z.enum(["subtle", "moderate", "obvious"]).optional().default("subtle")
     .describe("How visible the hidden image should be"),
   width: z.number().optional().default(512),
@@ -435,13 +442,48 @@ export async function preprocessControlImage(
 }
 
 /**
+ * Convert an image to high-contrast black and white using sharp.
+ *
+ * @param inputPath - Path to the input image
+ * @param outputPath - Path to save the B&W image
+ * @param threshold - Threshold value (0-255). Pixels above become white, below become black.
+ * @param invert - If true, swap black and white
+ * @returns The output path
+ */
+export async function convertToHighContrastBW(
+  inputPath: string,
+  outputPath: string,
+  threshold: number = 128,
+  invert: boolean = false
+): Promise<string> {
+  // Read and process the image
+  let image = sharp(inputPath)
+    .grayscale() // Convert to grayscale first
+    .normalize(); // Normalize to use full range
+
+  // Apply threshold to create pure B&W
+  // Sharp doesn't have a built-in threshold, so we use a custom operation
+  image = image.threshold(threshold);
+
+  // Optionally invert
+  if (invert) {
+    image = image.negate();
+  }
+
+  // Save the result
+  await image.toFile(outputPath);
+
+  return outputPath;
+}
+
+/**
  * Generate an image with a hidden image embedded (QR Code ControlNet)
  */
 export async function generateWithHiddenImage(
   client: ComfyUIClient,
   input: GenerateWithHiddenImageInput,
   defaultModel: string
-): Promise<{ success: boolean; path: string; seed: number; message: string }> {
+): Promise<{ success: boolean; path: string; seed: number; message: string; preprocessed?: string }> {
   // Map visibility to strength
   const visibilityStrength: Record<string, number> = {
     subtle: 0.9,
@@ -451,15 +493,36 @@ export async function generateWithHiddenImage(
 
   const strength = visibilityStrength[input.visibility || "subtle"];
 
-  return generateWithControlNet(client, {
+  let controlImage = input.hidden_image;
+  let preprocessedPath: string | undefined;
+
+  // Auto-convert to B&W if requested
+  if (input.convert_to_bw) {
+    const inputDir = client.getInputDir();
+    const inputPath = join(inputDir, input.hidden_image);
+    const bwFilename = `bw_${Date.now()}_${basename(input.hidden_image)}`;
+    const bwOutputPath = join(inputDir, bwFilename);
+
+    await convertToHighContrastBW(
+      inputPath,
+      bwOutputPath,
+      input.bw_threshold ?? 128,
+      input.bw_invert ?? false
+    );
+
+    controlImage = bwFilename;
+    preprocessedPath = bwOutputPath;
+  }
+
+  const result = await generateWithControlNet(client, {
     prompt: input.prompt,
     negative_prompt: input.negative_prompt,
-    control_image: input.hidden_image,
+    control_image: controlImage,
     control_type: "qrcode",
     strength,
     start_percent: 0.0,
     end_percent: 1.0,
-    preprocess: false, // QR code doesn't need preprocessing
+    preprocess: false, // QR code doesn't need ComfyUI preprocessing
     width: input.width ?? 512,
     height: input.height ?? 768,
     steps: input.steps ?? 28,
@@ -471,6 +534,11 @@ export async function generateWithHiddenImage(
     loras: input.loras,
     output_path: input.output_path,
   }, defaultModel);
+
+  return {
+    ...result,
+    preprocessed: preprocessedPath,
+  };
 }
 
 /**

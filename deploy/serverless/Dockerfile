@@ -32,8 +32,8 @@ RUN mkdir -p models/checkpoints models/loras models/vae models/video \
 WORKDIR /workspace/ComfyUI/custom_nodes
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git
 
-# Install F5-TTS for voice cloning
-RUN git clone https://github.com/SWivid/ComfyUI-F5-TTS.git \
+# Install F5-TTS for voice cloning (niknah version has working nodes)
+RUN git clone https://github.com/niknah/ComfyUI-F5-TTS.git \
     && cd ComfyUI-F5-TTS \
     && pip install --no-cache-dir -r requirements.txt || true
 
@@ -42,9 +42,10 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
     && cd ComfyUI-VideoHelperSuite \
     && pip install --no-cache-dir -r requirements.txt || true
 
-# Install SONIC for lip-sync (if available)
-# Note: SONIC may require manual setup - check repo for instructions
-RUN git clone https://github.com/AIFSH/ComfyUI-SONIC.git 2>/dev/null || echo "SONIC not available, will use alternative"
+# Install SONIC for lip-sync (smthemex version)
+RUN git clone https://github.com/smthemex/ComfyUI_Sonic.git \
+    && cd ComfyUI_Sonic \
+    && pip install --no-cache-dir -r requirements.txt || true
 
 # Install runpod SDK
 RUN pip install --no-cache-dir runpod requests

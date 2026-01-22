@@ -8,6 +8,7 @@ import {
   generateWithPose,
   generateWithComposition,
   listControlNetModels,
+  convertToHighContrastBW,
   generateWithControlNetSchema,
   generateWithMultiControlNetSchema,
   preprocessControlImageSchema,
@@ -21,6 +22,9 @@ import {
   createMockFetch,
   mockHistoryComplete,
 } from "../__mocks__/comfyui-responses.js";
+import { mkdir, writeFile, unlink, readFile } from "fs/promises";
+import { join } from "path";
+import sharp from "sharp";
 
 // Mock the file system operations
 vi.mock("fs/promises", async () => {
@@ -409,6 +413,277 @@ describe("generateWithHiddenImage", () => {
     expect(calledWorkflow["10"].inputs.image).toBe("qr.png");
     // No preprocessor for QR code
     expect(calledWorkflow["20"]).toBeUndefined();
+  });
+
+  describe("visibility strength mapping", () => {
+    it("should use strength 0.9 for subtle visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(0.9);
+    });
+
+    it("should use strength 1.1 for moderate visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "moderate",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(1.1);
+    });
+
+    it("should use strength 1.3 for obvious visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "obvious",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(1.3);
+    });
+  });
+
+  describe("QR ControlNet model selection by architecture", () => {
+    it("should use SD1.5 QR ControlNet for SD1.5 models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "v1-5-pruned.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "control_v1p_sd15_qrcode.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for SDXL models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "sdxl_base_1.0.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for Pony models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "moderate",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "ponyDiffusionV6XL.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for furry models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "obvious",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "novaFurryXL_v1.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for Illustrious models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "illustriousXL_v1.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+  });
+
+  describe("hidden image input handling", () => {
+    it("should never apply preprocessing to hidden images", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      // Even with preprocess typically true, hidden images skip preprocessing
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "company_logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      // Preprocessor node (20) should not exist
+      expect(calledWorkflow["20"]).toBeUndefined();
+      // Image loader should directly use the hidden image
+      expect(calledWorkflow["10"].inputs.image).toBe("company_logo.png");
+    });
+
+    it("should use full ControlNet application range (0-100%)", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.start_percent).toBe(0.0);
+      expect(calledWorkflow["14"].inputs.end_percent).toBe(1.0);
+    });
   });
 });
 
@@ -875,5 +1150,220 @@ describe("generateWithCompositionSchema", () => {
     const result = generateWithCompositionSchema.parse(input);
 
     expect(result.strength).toBe(0.7); // default for semantic seg
+  });
+});
+
+describe("convertToHighContrastBW", () => {
+  const testDir = "/tmp/comfyui-bw-test";
+  const testInputPath = join(testDir, "test_input.png");
+  const testOutputPath = join(testDir, "test_output.png");
+
+  // Create a test image helper
+  async function createTestGradientImage(outputPath: string): Promise<void> {
+    const width = 100;
+    const height = 100;
+    const channels = 3;
+    const pixels = Buffer.alloc(width * height * channels);
+
+    // Create a gradient from black to white
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * channels;
+        const value = Math.floor((x / width) * 255);
+        pixels[idx] = value;     // R
+        pixels[idx + 1] = value; // G
+        pixels[idx + 2] = value; // B
+      }
+    }
+
+    await sharp(pixels, { raw: { width, height, channels } })
+      .png()
+      .toFile(outputPath);
+  }
+
+  beforeEach(async () => {
+    // Create test directory synchronously to ensure it exists
+    const { mkdirSync, existsSync } = await import("fs");
+    if (!existsSync(testDir)) {
+      mkdirSync(testDir, { recursive: true });
+    }
+
+    // Create the test input image
+    await createTestGradientImage(testInputPath);
+  });
+
+  afterEach(async () => {
+    // Cleanup test files
+    try {
+      await unlink(testInputPath);
+      await unlink(testOutputPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  it("should convert image to high-contrast B&W", async () => {
+    const result = await convertToHighContrastBW(testInputPath, testOutputPath);
+
+    expect(result).toBe(testOutputPath);
+
+    // Verify the output exists and is a valid image
+    const outputMeta = await sharp(testOutputPath).metadata();
+    expect(outputMeta.width).toBe(100);
+    expect(outputMeta.height).toBe(100);
+  });
+
+  it("should apply threshold correctly", async () => {
+    // With threshold at 128, roughly half should be black, half white
+    await convertToHighContrastBW(testInputPath, testOutputPath, 128);
+
+    // Read the output and verify it's thresholded
+    const { data, info } = await sharp(testOutputPath)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    // Check that pixels are either 0 or 255 (pure B&W)
+    const uniqueValues = new Set<number>();
+    for (let i = 0; i < data.length; i++) {
+      uniqueValues.add(data[i]);
+    }
+
+    // Should only contain 0 and 255 (pure black and white)
+    expect(uniqueValues.size).toBeLessThanOrEqual(2);
+  });
+
+  it("should invert colors when invert is true", async () => {
+    // Create two outputs - normal and inverted
+    const invertedPath = join(testDir, "test_inverted.png");
+
+    await convertToHighContrastBW(testInputPath, testOutputPath, 128, false);
+    await convertToHighContrastBW(testInputPath, invertedPath, 128, true);
+
+    // Read both outputs
+    const normalData = await sharp(testOutputPath).raw().toBuffer();
+    const invertedData = await sharp(invertedPath).raw().toBuffer();
+
+    // First pixel should be opposite in inverted version
+    // (gradient starts dark, so normal should be black, inverted should be white)
+    expect(normalData[0]).not.toBe(invertedData[0]);
+
+    // Cleanup inverted file
+    await unlink(invertedPath);
+  });
+
+  it("should handle different threshold values", async () => {
+    // Low threshold = more white
+    await convertToHighContrastBW(testInputPath, testOutputPath, 50);
+    const lowThresholdData = await sharp(testOutputPath).raw().toBuffer();
+    const lowWhiteCount = [...lowThresholdData].filter(v => v === 255).length;
+
+    // High threshold = more black
+    await convertToHighContrastBW(testInputPath, testOutputPath, 200);
+    const highThresholdData = await sharp(testOutputPath).raw().toBuffer();
+    const highWhiteCount = [...highThresholdData].filter(v => v === 255).length;
+
+    // Low threshold should have more white pixels
+    expect(lowWhiteCount).toBeGreaterThan(highWhiteCount);
+  });
+});
+
+describe("generateWithHiddenImageSchema B&W conversion options", () => {
+  it("should have convert_to_bw option defaulting to false", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.convert_to_bw).toBe(false);
+  });
+
+  it("should accept convert_to_bw option", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+      convert_to_bw: true,
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.convert_to_bw).toBe(true);
+  });
+
+  it("should have bw_threshold defaulting to 128", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+      convert_to_bw: true,
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.bw_threshold).toBe(128);
+  });
+
+  it("should accept custom bw_threshold", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+      convert_to_bw: true,
+      bw_threshold: 200,
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.bw_threshold).toBe(200);
+  });
+
+  it("should reject bw_threshold outside 0-255 range", () => {
+    expect(() =>
+      generateWithHiddenImageSchema.parse({
+        prompt: "test",
+        hidden_image: "logo.png",
+        output_path: "/tmp/test.png",
+        bw_threshold: 300,
+      })
+    ).toThrow();
+
+    expect(() =>
+      generateWithHiddenImageSchema.parse({
+        prompt: "test",
+        hidden_image: "logo.png",
+        output_path: "/tmp/test.png",
+        bw_threshold: -10,
+      })
+    ).toThrow();
+  });
+
+  it("should have bw_invert defaulting to false", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+      convert_to_bw: true,
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.bw_invert).toBe(false);
+  });
+
+  it("should accept bw_invert option", () => {
+    const input = {
+      prompt: "test",
+      hidden_image: "logo.png",
+      output_path: "/tmp/test.png",
+      convert_to_bw: true,
+      bw_invert: true,
+    };
+
+    const result = generateWithHiddenImageSchema.parse(input);
+
+    expect(result.bw_invert).toBe(true);
   });
 });

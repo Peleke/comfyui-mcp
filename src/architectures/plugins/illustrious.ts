@@ -46,7 +46,7 @@ export const illustriousArchitecture: ModelArchitecture = {
     canny: "controlnet-canny-sdxl-1.0.safetensors",
     depth: "controlnet-depth-sdxl-1.0.safetensors",
     openpose: "controlnet-openpose-sdxl-1.0.safetensors",
-    qrcode: "controlnet-qr-sdxl.safetensors",
+    qrcode: "qrCodeMonsterSDXL_v10.safetensors",
     scribble: "controlnet-scribble-sdxl-1.0.safetensors",
     lineart: "controlnet-lineart-sdxl-1.0.safetensors",
     semantic_seg: "controlnet-seg-sdxl-1.0.safetensors",
