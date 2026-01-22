@@ -131,8 +131,66 @@ describe("Architecture Plugin System", () => {
           expect(sd15Model).not.toBeNull();
           expect(sdxlModel).not.toBeNull();
           expect(sd15Model).toContain("sd15");
-          expect(sdxlModel).toContain("sdxl");
+          // SDXL models contain "sdxl" (case-insensitive) - e.g., qrCodeMonsterSDXL
+          expect(sdxlModel!.toLowerCase()).toContain("sdxl");
         }
+      });
+
+      describe("QR ControlNet model selection", () => {
+        it("should return SD1.5 QR ControlNet for SD1.5 checkpoints", () => {
+          const model = architectures.getControlNetModel("v1-5-pruned.safetensors", "qrcode");
+          expect(model).toBe("control_v1p_sd15_qrcode.safetensors");
+        });
+
+        it("should return QR Code Monster SDXL for SDXL checkpoints", () => {
+          const model = architectures.getControlNetModel("sdxl_base.safetensors", "qrcode");
+          expect(model).toBe("qrCodeMonsterSDXL_v10.safetensors");
+        });
+
+        it("should return QR Code Monster SDXL for Pony checkpoints", () => {
+          const model = architectures.getControlNetModel("ponyDiffusionV6XL.safetensors", "qrcode");
+          expect(model).toBe("qrCodeMonsterSDXL_v10.safetensors");
+        });
+
+        it("should return QR Code Monster SDXL for Illustrious checkpoints", () => {
+          const model = architectures.getControlNetModel("illustriousXL_v1.safetensors", "qrcode");
+          expect(model).toBe("qrCodeMonsterSDXL_v10.safetensors");
+        });
+
+        it("should return QR Code Monster SDXL for furry models (Pony-based)", () => {
+          const testCases = [
+            "novaFurryXL_v1.safetensors",
+            "yiffinhell_v13.safetensors",
+            "yiffymix_v35.safetensors",
+          ];
+
+          for (const checkpoint of testCases) {
+            const model = architectures.getControlNetModel(checkpoint, "qrcode");
+            expect(model).toBe("qrCodeMonsterSDXL_v10.safetensors");
+          }
+        });
+
+        it("should return null for Flux checkpoints (no QR ControlNet support)", () => {
+          const model = architectures.getControlNetModel("flux1-schnell.safetensors", "qrcode");
+          expect(model).toBeNull();
+        });
+
+        it("should use consistent QR model across all SDXL-based architectures", () => {
+          const sdxlBasedModels = [
+            "sdxl_base.safetensors",
+            "ponyDiffusionV6XL.safetensors",
+            "illustriousXL_v1.safetensors",
+            "novaFurryXL_v1.safetensors",
+          ];
+
+          const qrModels = sdxlBasedModels.map(m =>
+            architectures.getControlNetModel(m, "qrcode")
+          );
+
+          // All SDXL-based models should use the same QR ControlNet
+          expect(new Set(qrModels).size).toBe(1);
+          expect(qrModels[0]).toBe("qrCodeMonsterSDXL_v10.safetensors");
+        });
       });
     });
 

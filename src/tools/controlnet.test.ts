@@ -410,6 +410,277 @@ describe("generateWithHiddenImage", () => {
     // No preprocessor for QR code
     expect(calledWorkflow["20"]).toBeUndefined();
   });
+
+  describe("visibility strength mapping", () => {
+    it("should use strength 0.9 for subtle visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(0.9);
+    });
+
+    it("should use strength 1.1 for moderate visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "moderate",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(1.1);
+    });
+
+    it("should use strength 1.3 for obvious visibility", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "obvious",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.strength).toBe(1.3);
+    });
+  });
+
+  describe("QR ControlNet model selection by architecture", () => {
+    it("should use SD1.5 QR ControlNet for SD1.5 models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "v1-5-pruned.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "control_v1p_sd15_qrcode.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for SDXL models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "sdxl_base_1.0.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for Pony models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "moderate",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "ponyDiffusionV6XL.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for furry models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "obvious",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "novaFurryXL_v1.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+
+    it("should use QR Code Monster SDXL for Illustrious models", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "illustriousXL_v1.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["11"].inputs.control_net_name).toBe(
+        "qrCodeMonsterSDXL_v10.safetensors"
+      );
+    });
+  });
+
+  describe("hidden image input handling", () => {
+    it("should never apply preprocessing to hidden images", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      // Even with preprocess typically true, hidden images skip preprocessing
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "company_logo.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      // Preprocessor node (20) should not exist
+      expect(calledWorkflow["20"]).toBeUndefined();
+      // Image loader should directly use the hidden image
+      expect(calledWorkflow["10"].inputs.image).toBe("company_logo.png");
+    });
+
+    it("should use full ControlNet application range (0-100%)", async () => {
+      global.fetch = createMockFetch() as typeof fetch;
+      const queueSpy = vi.spyOn(client, "queuePrompt");
+
+      await generateWithHiddenImage(
+        client,
+        {
+          prompt: "test",
+          hidden_image: "qr.png",
+          output_path: "/tmp/test.png",
+          visibility: "subtle",
+          width: 512,
+          height: 768,
+          steps: 28,
+          cfg_scale: 7,
+          sampler: "euler_ancestral",
+          scheduler: "normal",
+        },
+        "model.safetensors"
+      );
+
+      const calledWorkflow = queueSpy.mock.calls[0][0];
+      expect(calledWorkflow["14"].inputs.start_percent).toBe(0.0);
+      expect(calledWorkflow["14"].inputs.end_percent).toBe(1.0);
+    });
+  });
 });
 
 describe("stylizePhoto", () => {
