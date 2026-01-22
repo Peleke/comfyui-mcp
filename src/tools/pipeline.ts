@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { ComfyUIClient } from "../comfyui-client.js";
-import { buildTxt2ImgWorkflow, buildImg2ImgWorkflow, buildUpscaleWorkflow, LoraConfig } from "../workflows/builder.js";
+import {
+  buildTxt2ImgWorkflow,
+  buildImg2ImgWorkflow,
+  buildUpscaleWorkflow,
+  buildZTurboTxt2ImgWorkflow,
+  buildZTurboImg2ImgWorkflow,
+  isZImageTurboModel,
+  LoraConfig,
+} from "../workflows/builder.js";
 import { mkdir } from "fs/promises";
 import { dirname, basename } from "path";
 
@@ -115,22 +123,39 @@ export async function executePipeline(
   // ============================================================
   // STEP 1: Text-to-Image
   // ============================================================
-  try {
-    console.error("Pipeline: Starting txt2img...");
+  const isZTurbo = isZImageTurboModel(model);
 
-    const txt2imgWorkflow = buildTxt2ImgWorkflow({
-      prompt: input.prompt,
-      negativePrompt: input.negative_prompt,
-      width: input.width,
-      height: input.height,
-      steps: input.steps,
-      cfgScale: input.cfg_scale,
-      sampler: input.sampler,
-      scheduler: input.scheduler,
-      model: model,
-      seed: seed,
-      loras: loras,
-    });
+  try {
+    console.error(`Pipeline: Starting txt2img${isZTurbo ? " (Z-Image Turbo mode)" : ""}...`);
+
+    // Use Z-Image Turbo workflow if detected
+    const txt2imgWorkflow = isZTurbo
+      ? buildZTurboTxt2ImgWorkflow({
+          prompt: input.prompt,
+          // Z-Image ignores negative prompts
+          width: input.width,
+          height: input.height,
+          steps: input.steps || 8, // Z-Image default
+          cfgScale: 1.0, // Fixed for Z-Image
+          sampler: input.sampler || "euler",
+          scheduler: input.scheduler || "simple",
+          model: model,
+          seed: seed,
+          loras: loras,
+        })
+      : buildTxt2ImgWorkflow({
+          prompt: input.prompt,
+          negativePrompt: input.negative_prompt,
+          width: input.width,
+          height: input.height,
+          steps: input.steps,
+          cfgScale: input.cfg_scale,
+          sampler: input.sampler,
+          scheduler: input.scheduler,
+          model: model,
+          seed: seed,
+          loras: loras,
+        });
 
     const { prompt_id } = await client.queuePrompt(txt2imgWorkflow);
     const history = await client.waitForCompletion(prompt_id, (value, max) => {
@@ -195,19 +220,34 @@ export async function executePipeline(
       const hiresWidth = Math.round(input.width! * input.hires_scale!);
       const hiresHeight = Math.round(input.height! * input.hires_scale!);
 
-      const img2imgWorkflow = buildImg2ImgWorkflow({
-        prompt: input.prompt,
-        negativePrompt: input.negative_prompt,
-        inputImage: uploadedFilename,
-        denoise: input.hires_denoise,
-        steps: input.hires_steps,
-        cfgScale: input.cfg_scale,
-        sampler: input.sampler,
-        scheduler: input.scheduler,
-        model: model,
-        seed: seed, // Use same seed for consistency
-        loras: loras,
-      });
+      // Use Z-Image Turbo img2img workflow if detected
+      const img2imgWorkflow = isZTurbo
+        ? buildZTurboImg2ImgWorkflow({
+            prompt: input.prompt,
+            // Z-Image ignores negative prompts
+            inputImage: uploadedFilename,
+            denoise: input.hires_denoise,
+            steps: input.hires_steps || 8,
+            cfgScale: 1.0, // Fixed for Z-Image
+            sampler: input.sampler || "euler",
+            scheduler: input.scheduler || "simple",
+            model: model,
+            seed: seed,
+            loras: loras,
+          })
+        : buildImg2ImgWorkflow({
+            prompt: input.prompt,
+            negativePrompt: input.negative_prompt,
+            inputImage: uploadedFilename,
+            denoise: input.hires_denoise,
+            steps: input.hires_steps,
+            cfgScale: input.cfg_scale,
+            sampler: input.sampler,
+            scheduler: input.scheduler,
+            model: model,
+            seed: seed,
+            loras: loras,
+          });
 
       // Manually set the scaled dimensions in the VAE Encode's source
       // This requires modifying the workflow to resize
@@ -218,7 +258,9 @@ export async function executePipeline(
         console.error(`  hi-res fix progress: ${value}/${max}`);
       });
 
-      const saveImageOutput = history.outputs["9"];
+      // Z-Image img2img uses node "10" for SaveImage, standard uses "9"
+      const saveImageNodeId = isZTurbo ? "10" : "9";
+      const saveImageOutput = history.outputs[saveImageNodeId];
       if (!saveImageOutput?.images?.[0]) {
         throw new Error("No image in hi-res fix output");
       }
