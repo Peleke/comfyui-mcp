@@ -47,12 +47,13 @@ RUN git clone https://github.com/smthemex/ComfyUI_Sonic.git \
     && cd ComfyUI_Sonic \
     && pip install --no-cache-dir -r requirements.txt || true
 
-# Install runpod SDK
-RUN pip install --no-cache-dir runpod requests
+# Install runpod SDK and test dependencies
+RUN pip install --no-cache-dir runpod requests pytest
 
-# Copy handler
+# Copy handler and tests
 WORKDIR /workspace
 COPY handler.py /workspace/handler.py
+COPY test_handler.py /workspace/test_handler.py
 COPY start.sh /workspace/start.sh
 RUN chmod +x /workspace/start.sh
 
