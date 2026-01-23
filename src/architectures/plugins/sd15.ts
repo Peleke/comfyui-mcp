@@ -14,13 +14,20 @@ export const sd15Architecture: ModelArchitecture = {
   id: "sd15",
   displayName: "Stable Diffusion 1.5",
 
-  // Detection patterns - lowest priority, only match explicit SD1.5 references
+  // Detection patterns - match explicit SD1.5 references and known SD1.5 model families
+  // Negative lookahead excludes XL/Pony/SDXL variants
   patterns: [
     /v1-5/i,
     /sd.*1\.5/i,
     /sd15/i,
     /1\.5.*pruned/i,
     /stable.*diffusion.*1/i,
+    // Known SD1.5 model families (exclude XL/Pony/SDXL variants)
+    /cyberrealistic(?!.*(?:pony|xl|sdxl))/i,
+    /deliberate(?!.*(?:xl|sdxl))/i,
+    /dreamshaper(?!.*(?:xl|sdxl))/i,
+    /realistic.?vision(?!.*(?:xl|sdxl))/i,
+    /anything.?v[345](?!.*(?:xl|sdxl))/i,
   ],
   priority: 40,
 
