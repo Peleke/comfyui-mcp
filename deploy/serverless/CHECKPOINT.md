@@ -1,90 +1,195 @@
 # SONIC Lipsync Serverless - Checkpoint
 
-**Date:** 2026-01-22
-**Status:** BROKEN - workflow errors, no output
+**Date:** 2026-01-23
+**Status:** v34 - WORKING! Full pipeline: portrait gen, TTS, lipsync with Supabase upload
 
-## Goal
+## What Works
 
-Get SONIC lip-sync working on RunPod serverless with Supabase upload.
+- **Lipsync**: Portrait + audio → talking head video
+- **Portrait Generation**: Text prompt → image (saved directly to avatars folder)
+- **TTS**: Text + voice sample → cloned speech audio
+- **Supabase Upload**: All outputs uploaded with signed URLs
 
-## Current State
+## Critical Lessons Learned
 
-- Docker image: `pelekes/comfyui-serverless:v25`
-- RunPod endpoint: `urauigb5h66a1y`
-- Handler version: `v25-match-working-workflow`
+### Volume Mount Paths (THE BIG ONE)
 
-### What Works
-- ComfyUI starts successfully on RunPod
-- Model symlinks work (checkpoints, sonic, video, voices, avatars)
-- Supabase integration is configured
-- Portrait generation workflow (untested recently but was working)
+| Environment | Volume Path |
+|-------------|-------------|
+| Provisioning Pod | `/workspace` |
+| Serverless Container | `/runpod-volume` |
+| Docker Container (ComfyUI) | `/workspace/ComfyUI` |
 
-### What's Broken
-- SONIC lipsync workflow returns `status_str: "error"` with empty outputs
-- `history_output_nodes: []` means ComfyUI workflow fails silently
+The handler creates symlinks at runtime from `/runpod-volume/*` → `/workspace/ComfyUI/models/*`.
 
-## Working Reference
+### SONIC Model Structure Gotcha
 
-The MCP server has a working workflow at `src/workflows/lipsync-sonic.json`:
+The HuggingFace download puts models in a **subdirectory**:
+```
+/workspace/sonic/
+├── Sonic/           ← Actual models here!
+│   ├── unet.pth     ← 5.9GB
+│   ├── audio2token.pth
+│   └── audio2bucket.pth
+├── unet.pth         ← EMPTY 0-byte placeholder!
+├── audio2token.pth  ← EMPTY!
+└── audio2bucket.pth ← EMPTY!
+```
 
+**Fix**: Symlink the real models up one level:
+```bash
+cd /workspace/sonic
+rm -f unet.pth audio2token.pth audio2bucket.pth
+ln -s Sonic/unet.pth unet.pth
+ln -s Sonic/audio2token.pth audio2token.pth
+ln -s Sonic/audio2bucket.pth audio2bucket.pth
+```
+
+### Whisper-tiny Location
+
+SONIC expects whisper-tiny INSIDE the sonic folder:
+```bash
+cd /workspace/sonic
+ln -sf ../whisper/whisper-tiny whisper-tiny
+```
+
+### SONIC_PreData weight_dtype
+
+The `weight_dtype` input must be a **connection** to SONICTLoader's second output, NOT a string:
+```python
+# WRONG
+"weight_dtype": "fp16"
+
+# CORRECT
+"weight_dtype": ["4", 1]  # SONICTLoader output index 1 = DTYPE
+```
+
+### Seed Limits
+
+ComfyUI seeds max at 32-bit signed int:
+```python
+seed = seed % 2147483647
+```
+
+## Handler v34 Features
+
+- **save_to_avatars**: Portrait action can save directly to avatars folder
+- **Auto audio duration**: ffprobe detection, warns on mismatch
+- **Input validation**: Checks files exist before running
+- **Supabase error details**: Shows actual error message on upload failure
+- **Runtime symlinks**: Creates volume → ComfyUI symlinks at startup
+
+## Test Commands
+
+### Health Check
+```bash
+curl -s -X POST "https://api.runpod.ai/v2/YOUR_ENDPOINT/runsync" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input":{"action":"health"}}' | jq .
+```
+
+### Portrait (with save to avatars)
+```bash
+curl -s -X POST "https://api.runpod.ai/v2/YOUR_ENDPOINT/run" \
+  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "action": "portrait",
+      "model": "Deliberate_v5.safetensors",
+      "description": "Odin, Norse god, one eye, grey beard, wise, portrait",
+      "save_to_avatars": true,
+      "avatar_name": "odin"
+    }
+  }' | jq .
+```
+
+Response includes:
 ```json
 {
-  "1": {"class_type": "ImageOnlyCheckpointLoader", "inputs": {"ckpt_name": "video/svd_xt_1_1.safetensors"}},
-  "4": {"class_type": "LoadImage", "inputs": {"image": "portrait.png"}},
-  "5": {"class_type": "LoadAudio", "inputs": {"audio": "speech.wav"}},
-  "6": {"class_type": "SONICTLoader", "inputs": {"model": ["1", 0], "sonic_unet": "unet.pth", "ip_audio_scale": 1.0, "use_interframe": true, "dtype": "fp16"}},
-  "7": {"class_type": "SONIC_PreData", "inputs": {"clip_vision": ["1", 1], "vae": ["1", 2], "audio": ["5", 0], "image": ["4", 0], "min_resolution": 512, "duration": 99999, "expand_ratio": 1}},
-  "8": {"class_type": "SONICSampler", "inputs": {"model": ["6", 0], "data_dict": ["7", 0], "seed": 0, "randomize": "randomize", "inference_steps": 25, "dynamic_scale": 1.0, "fps": 25.0}},
-  "9": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["8", 0], "audio": ["5", 0], "frame_rate": ["8", 1], "loop_count": 0, "filename_prefix": "ComfyUI_LipSync", "format": "video/h264-mp4", "pingpong": false, "save_output": true}}
+  "avatar_saved": "avatars/odin.png",
+  "lipsync_ready": true
 }
 ```
 
-## Test Files on RunPod Volume
-
-- Portrait: `/runpod-volume/avatars/anime1.png`
-- Audio: `/runpod-volume/voices/talk_male_10s.wav`
-- SVD model: `/runpod-volume/video/svd_xt_1_1.safetensors`
-- SONIC unet: `/runpod-volume/sonic/unet.pth`
-
-## Known Issues
-
-1. **`duration: 99999`** - Magic number meaning "use full audio". Probably wrong, needs actual audio duration or reasonable default.
-
-2. **No error details** - ComfyUI returns `status_str: "error"` but we don't capture the actual error message from the execution. Need to check `history.get("status", {}).get("messages", [])` or similar.
-
-3. **Workflow not validated locally** - We've been deploying to RunPod without testing the workflow structure locally first. Should test against local ComfyUI or use ComfyUI's `/prompt` validation endpoint.
-
-## Next Steps
-
-1. **Get actual error message** - Modify handler to return full `history["status"]` to see why workflow fails
-
-2. **Test workflow locally** - Use the MCP server's existing lipsync tools to verify the workflow works before porting to serverless
-
-3. **Check SONIC node versions** - The ComfyUI_Sonic plugin on RunPod may have different node signatures than expected
-
-4. **Validate inputs exist** - Before running workflow, verify portrait/audio files actually exist at expected paths
-
-## Test Command
-
+### Lipsync
 ```bash
-curl -s -X POST "https://api.runpod.ai/v2/urauigb5h66a1y/runsync" \
+curl -s -X POST "https://api.runpod.ai/v2/YOUR_ENDPOINT/run" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"input":{"action":"lipsync","portrait_image":"avatars/anime1.png","audio":"voices/talk_male_10s.wav","svd_checkpoint":"video/svd_xt_1_1.safetensors"}}' | jq .
+  -d '{
+    "input": {
+      "action": "lipsync",
+      "portrait_image": "avatars/odin.png",
+      "audio": "voices/talk_male_10s.wav"
+    }
+  }' | jq .
 ```
 
-## Debug Command
-
+### TTS
 ```bash
-curl -s -X POST "https://api.runpod.ai/v2/urauigb5h66a1y/runsync" \
+curl -s -X POST "https://api.runpod.ai/v2/YOUR_ENDPOINT/run" \
   -H "Authorization: Bearer $RUNPOD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"input":{"action":"debug"}}' | jq .
+  -d '{
+    "input": {
+      "action": "tts",
+      "text": "Hello, I am Odin, the Allfather.",
+      "voice_sample": "voices/sample.wav"
+    }
+  }' | jq .
 ```
 
-## Files
+## Files on Volume
 
-- Handler: `deploy/serverless/handler.py`
-- Dockerfile: `deploy/serverless/Dockerfile`
-- Working workflow reference: `src/workflows/lipsync-sonic.json`
-- MCP lipsync tool: `src/tools/lipsync.ts`
+```
+/workspace/  (provisioning) or /runpod-volume/ (serverless)
+├── sonic/
+│   ├── Sonic/          ← Real models
+│   ├── unet.pth        ← Symlink to Sonic/unet.pth
+│   ├── audio2token.pth ← Symlink
+│   ├── audio2bucket.pth← Symlink
+│   └── whisper-tiny    ← Symlink to ../whisper/whisper-tiny
+├── video/
+│   └── svd_xt_1_1.safetensors
+├── whisper/
+│   └── whisper-tiny/
+├── f5_tts/
+│   └── F5TTS_v1_Base/
+├── checkpoints/
+│   └── Deliberate_v5.safetensors
+├── voices/             ← Voice samples for TTS
+├── avatars/            ← Portrait images for lipsync
+└── ComfyUI/            ← Symlink structure (created by handler)
+    ├── models/
+    │   ├── sonic -> /runpod-volume/sonic
+    │   ├── video -> /runpod-volume/video
+    │   └── ...
+    └── input/
+        ├── voices -> /runpod-volume/voices
+        └── avatars -> /runpod-volume/avatars
+```
+
+## Provisioning
+
+Run `deploy/scripts/provision-models.sh` on a provisioning pod:
+```bash
+curl -sL https://raw.githubusercontent.com/.../provision-models.sh | bash -s hf_YOURTOKEN
+```
+
+The script:
+1. Downloads all models from HuggingFace
+2. Fixes SONIC model symlinks
+3. Links whisper-tiny into sonic folder
+4. Creates ComfyUI directory structure
+5. Verifies all critical files
+
+## Build & Deploy
+
+```bash
+cd deploy/serverless
+docker buildx build --platform linux/amd64 -t pelekes/comfyui-serverless:v34 --push .
+```
+
+Then update RunPod template to use new image version.

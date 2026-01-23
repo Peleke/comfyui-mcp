@@ -6,7 +6,7 @@ Supports: portrait generation, TTS voice cloning, lip-sync video generation.
 
 Usage:
     Endpoint receives: {"input": {"action": "portrait", "description": "...", ...}}
-    Returns: {"output": {"image_url": "...", "seed": ...}}
+    Returns: {"output": {"files": [...], "seed": ..., "status": "success|error"}}
 """
 
 import runpod
@@ -18,17 +18,30 @@ import os
 import base64
 import uuid
 import mimetypes
+import logging
 from pathlib import Path
 from datetime import date
 
-# Configuration
+# ============================================================================
+# Version & Configuration
+# ============================================================================
+
+HANDLER_VERSION = "v34"
+
+# ComfyUI configuration
 COMFYUI_HOST = "127.0.0.1"
 COMFYUI_PORT = 8188
 COMFYUI_URL = f"http://{COMFYUI_HOST}:{COMFYUI_PORT}"
 STARTUP_TIMEOUT = 120  # seconds to wait for ComfyUI to start
-OUTPUT_DIR = "/workspace/ComfyUI/output"
+
+# Paths
+# Network volume is mounted at /runpod-volume (NOT /workspace)
+# Docker container has ComfyUI at /workspace/ComfyUI
 NETWORK_VOLUME = "/runpod-volume"
+COMFYUI_DIR = "/workspace/ComfyUI"
 COMFYUI_MODELS = "/workspace/ComfyUI/models"
+COMFYUI_INPUT = "/workspace/ComfyUI/input"
+OUTPUT_DIR = "/workspace/ComfyUI/output"
 
 # Supabase Configuration (optional - falls back to base64 if not set)
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
@@ -38,57 +51,171 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "comfyui-outputs")
 # Global ComfyUI process
 comfyui_process = None
 
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+log = logging.getLogger("handler")
 
-def setup_model_symlinks():
-    """Symlink network volume models into ComfyUI models folder."""
+
+# ============================================================================
+# Audio Duration Detection
+# ============================================================================
+
+def get_audio_duration(audio_path: str) -> float:
+    """Get audio duration in seconds using ffprobe."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "csv=p=0", audio_path],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed for {audio_path}: {result.stderr}")
+    duration_str = result.stdout.strip()
+    if not duration_str:
+        raise RuntimeError(f"ffprobe returned empty duration for {audio_path}")
+    return float(duration_str)
+
+
+def resolve_duration(audio_path: str, caller_duration: float | None) -> tuple[float, str | None]:
+    """
+    Resolve audio duration with validation.
+    Returns (duration, warning_message).
+
+    - Always auto-detects via ffprobe
+    - If caller provided duration, warn if significantly different
+    """
+    detected = get_audio_duration(audio_path)
+    warning = None
+
+    if caller_duration is not None:
+        diff = abs(detected - caller_duration)
+        if diff > 1.0:  # More than 1 second difference
+            warning = f"Caller duration ({caller_duration}s) differs from detected ({detected:.1f}s), using detected"
+
+    return detected, warning
+
+
+# ============================================================================
+# Input Validation
+# ============================================================================
+
+def validate_inputs(action: str, params: dict) -> list[str]:
+    """Validate required input files exist. Returns list of errors."""
+    errors = []
+
+    if action == "lipsync":
+        portrait = params.get("portrait_image", "")
+        audio = params.get("audio", "")
+
+        # Portrait path: relative to input dir
+        portrait_path = os.path.join(COMFYUI_INPUT, portrait)
+        if not portrait:
+            errors.append("Missing required parameter: portrait_image")
+        elif not os.path.exists(portrait_path):
+            errors.append(f"Portrait not found: {portrait_path}")
+
+        # Audio path: relative to input dir
+        audio_path = os.path.join(COMFYUI_INPUT, audio)
+        if not audio:
+            errors.append("Missing required parameter: audio")
+        elif not os.path.exists(audio_path):
+            errors.append(f"Audio not found: {audio_path}")
+
+    elif action == "tts":
+        voice_sample = params.get("voice_sample", "")
+        text = params.get("text", "")
+
+        if not text:
+            errors.append("Missing required parameter: text")
+
+        if voice_sample:
+            sample_path = os.path.join(COMFYUI_INPUT, voice_sample)
+            if not os.path.exists(sample_path):
+                errors.append(f"Voice sample not found: {sample_path}")
+
+    elif action == "portrait":
+        # Portrait generation doesn't require input files
+        pass
+
+    return errors
+
+
+# ============================================================================
+# Symlinks & Setup
+# ============================================================================
+
+def setup_symlinks():
+    """Create symlinks from /runpod-volume/* to /workspace/ComfyUI/*.
+
+    Problem:
+    - Network volume is mounted at /runpod-volume with models/inputs
+    - Docker container has ComfyUI at /workspace/ComfyUI with empty dirs
+    - ComfyUI expects models at /workspace/ComfyUI/models/
+
+    Solution: Symlink /runpod-volume/<dir> -> /workspace/ComfyUI/models/<dir>
+    """
+    import shutil
+
     if not os.path.exists(NETWORK_VOLUME):
-        print(f"Network volume not found at {NETWORK_VOLUME}")
+        log.warning(f"Network volume not found at {NETWORK_VOLUME}")
         return
 
-    # Model directories to symlink
+    # Model directories: /runpod-volume/<dir> -> /workspace/ComfyUI/models/<dir>
     model_dirs = [
-        "checkpoints",
-        "loras",
-        "vae",
-        "controlnet",
-        "clip",
-        "clip_vision",
-        "sonic",
-        "video",
-        "f5_tts",
-        "whisper",
-        "animatediff_models",
+        "checkpoints", "video", "sonic", "f5_tts", "whisper",
+        "controlnet", "loras", "vae", "clip", "clip_vision",
+        "animatediff_models", "text_encoders"
     ]
 
     for model_dir in model_dirs:
-        volume_path = os.path.join(NETWORK_VOLUME, model_dir)
-        comfyui_path = os.path.join(COMFYUI_MODELS, model_dir)
+        src = os.path.join(NETWORK_VOLUME, model_dir)
+        dst = os.path.join(COMFYUI_MODELS, model_dir)
 
-        if os.path.exists(volume_path):
-            # Remove existing dir/link if present
-            if os.path.islink(comfyui_path):
-                os.unlink(comfyui_path)
-            elif os.path.isdir(comfyui_path):
-                import shutil
-                shutil.rmtree(comfyui_path)
+        if os.path.exists(src):
+            # Remove Docker's empty dir if it exists and isn't already a symlink
+            if os.path.exists(dst) and not os.path.islink(dst):
+                if os.path.isdir(dst):
+                    try:
+                        os.rmdir(dst)  # Only removes if empty
+                    except OSError:
+                        shutil.rmtree(dst)  # Force remove if not empty
 
-            os.symlink(volume_path, comfyui_path)
-            print(f"Linked {model_dir}: {volume_path} -> {comfyui_path}")
+            # Create symlink if it doesn't exist
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+                log.info(f"Linked model: {model_dir}")
 
-    # Also symlink input directories for voices/avatars
-    for input_dir in ["voices", "avatars"]:
-        volume_path = os.path.join(NETWORK_VOLUME, input_dir)
-        comfyui_path = os.path.join("/workspace/ComfyUI/input", input_dir)
+    # SONIC expects whisper-tiny inside sonic folder, but it's provisioned separately
+    # Since /workspace/ComfyUI/models/sonic -> /runpod-volume/sonic, we need to
+    # create the symlink ON THE NETWORK VOLUME: /runpod-volume/sonic/whisper-tiny -> /runpod-volume/whisper/whisper-tiny
+    whisper_src = os.path.join(NETWORK_VOLUME, "whisper", "whisper-tiny")
+    sonic_on_volume = os.path.join(NETWORK_VOLUME, "sonic")
+    whisper_dst = os.path.join(sonic_on_volume, "whisper-tiny")
+    if os.path.exists(whisper_src) and os.path.exists(sonic_on_volume) and not os.path.exists(whisper_dst):
+        os.symlink(whisper_src, whisper_dst)
+        log.info("Linked whisper-tiny into sonic folder on network volume")
 
-        if os.path.exists(volume_path):
-            if os.path.islink(comfyui_path):
-                os.unlink(comfyui_path)
-            elif os.path.isdir(comfyui_path):
-                import shutil
-                shutil.rmtree(comfyui_path)
+    # Input directories: /runpod-volume/<dir> -> /workspace/ComfyUI/input/<dir>
+    input_dirs = ["voices", "avatars"]
 
-            os.symlink(volume_path, comfyui_path)
-            print(f"Linked input/{input_dir}")
+    for input_dir in input_dirs:
+        src = os.path.join(NETWORK_VOLUME, input_dir)
+        dst = os.path.join(COMFYUI_INPUT, input_dir)
+
+        if os.path.exists(src):
+            # Remove Docker's empty dir
+            if os.path.exists(dst) and not os.path.islink(dst):
+                if os.path.isdir(dst):
+                    try:
+                        os.rmdir(dst)
+                    except OSError:
+                        shutil.rmtree(dst)
+
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+                log.info(f"Linked input: {input_dir}")
 
 
 def start_comfyui():
@@ -98,13 +225,13 @@ def start_comfyui():
     if comfyui_process is not None:
         return
 
-    # Setup symlinks before starting
-    setup_model_symlinks()
+    # Setup symlinks before starting (fixes Docker overlay issue)
+    setup_symlinks()
 
-    print("Starting ComfyUI server...")
+    log.info(f"[{HANDLER_VERSION}] Starting ComfyUI server...")
     comfyui_process = subprocess.Popen(
         ["python", "main.py", "--listen", COMFYUI_HOST, "--port", str(COMFYUI_PORT)],
-        cwd="/workspace/ComfyUI",
+        cwd=COMFYUI_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT
     )
@@ -115,7 +242,7 @@ def start_comfyui():
         try:
             response = requests.get(f"{COMFYUI_URL}/system_stats", timeout=2)
             if response.status_code == 200:
-                print(f"ComfyUI ready after {time.time() - start_time:.1f}s")
+                log.info(f"ComfyUI ready after {time.time() - start_time:.1f}s")
                 return
         except requests.exceptions.RequestException:
             pass
@@ -124,6 +251,10 @@ def start_comfyui():
     raise RuntimeError(f"ComfyUI failed to start within {STARTUP_TIMEOUT}s")
 
 
+# ============================================================================
+# ComfyUI API Helpers
+# ============================================================================
+
 def queue_prompt(workflow: dict) -> str:
     """Queue a workflow and return prompt ID."""
     response = requests.post(
@@ -131,7 +262,6 @@ def queue_prompt(workflow: dict) -> str:
         json={"prompt": workflow}
     )
     if response.status_code != 200:
-        # Capture the actual error from ComfyUI
         try:
             error_details = response.json()
         except Exception:
@@ -156,11 +286,19 @@ def wait_for_completion(prompt_id: str, timeout: int = 300) -> dict:
 
 
 def get_output_files(history: dict) -> list:
-    """Extract output file paths from history."""
+    """Extract output file paths from history.
+
+    Handles:
+    - images: Standard image outputs
+    - gifs: VHS_VideoCombine outputs (uses 'gifs' even for mp4)
+    - videos: Other video nodes
+    - audio: SaveAudioTensor and similar audio outputs
+    """
     files = []
     outputs = history.get("outputs", {})
 
     for node_id, node_output in outputs.items():
+        # Images
         if "images" in node_output:
             for img in node_output["images"]:
                 files.append({
@@ -169,6 +307,8 @@ def get_output_files(history: dict) -> list:
                     "subfolder": img.get("subfolder", ""),
                     "path": os.path.join(OUTPUT_DIR, img.get("subfolder", ""), img["filename"])
                 })
+
+        # Videos (VHS uses 'gifs' key even for mp4)
         if "gifs" in node_output:
             for gif in node_output["gifs"]:
                 files.append({
@@ -178,8 +318,44 @@ def get_output_files(history: dict) -> list:
                     "path": os.path.join(OUTPUT_DIR, gif.get("subfolder", ""), gif["filename"])
                 })
 
+        # Some nodes use 'videos' key
+        if "videos" in node_output:
+            for vid in node_output["videos"]:
+                files.append({
+                    "type": "video",
+                    "filename": vid["filename"],
+                    "subfolder": vid.get("subfolder", ""),
+                    "path": os.path.join(OUTPUT_DIR, vid.get("subfolder", ""), vid["filename"])
+                })
+
+        # Audio (SaveAudioTensor and similar)
+        if "audio" in node_output:
+            for aud in node_output["audio"]:
+                files.append({
+                    "type": "audio",
+                    "filename": aud["filename"],
+                    "subfolder": aud.get("subfolder", ""),
+                    "path": os.path.join(OUTPUT_DIR, aud.get("subfolder", ""), aud["filename"])
+                })
+
     return files
 
+
+def cleanup_output_files(files: list[dict]):
+    """Delete local output files after successful upload."""
+    for f in files:
+        try:
+            path = f.get("path")
+            if path and os.path.exists(path):
+                os.remove(path)
+                log.debug(f"Cleaned up: {path}")
+        except OSError as e:
+            log.warning(f"Failed to cleanup {f.get('path')}: {e}")
+
+
+# ============================================================================
+# File Handling
+# ============================================================================
 
 def file_to_base64(filepath: str) -> str:
     """Read file and return base64 encoded content."""
@@ -201,12 +377,10 @@ def upload_to_supabase(local_path: str, remote_path: str) -> dict:
     with open(local_path, "rb") as f:
         file_data = f.read()
 
-    # Guess content type
     content_type, _ = mimetypes.guess_type(local_path)
     if not content_type:
         content_type = "application/octet-stream"
 
-    # Upload via Supabase Storage API
     upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{remote_path}"
     headers = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -215,9 +389,14 @@ def upload_to_supabase(local_path: str, remote_path: str) -> dict:
     }
 
     response = requests.post(upload_url, headers=headers, data=file_data)
-    response.raise_for_status()
+    if response.status_code >= 400:
+        # Capture actual error message from Supabase
+        try:
+            error_detail = response.json()
+        except Exception:
+            error_detail = response.text
+        raise RuntimeError(f"Supabase upload failed ({response.status_code}): {error_detail}")
 
-    # Build URLs
     public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{remote_path}"
 
     # Create signed URL (1 hour expiry)
@@ -241,26 +420,33 @@ def upload_to_supabase(local_path: str, remote_path: str) -> dict:
     }
 
 
+# ============================================================================
+# Debug Info
+# ============================================================================
+
 def get_debug_info() -> dict:
     """Get debug info about volume, models, and ComfyUI status."""
     debug = {
-        "volume_exists": os.path.exists(NETWORK_VOLUME),
-        "volume_contents": [],
-        "checkpoints_path": os.path.join(NETWORK_VOLUME, "checkpoints"),
+        "version": HANDLER_VERSION,
+        "network_volume_path": NETWORK_VOLUME,
+        "network_volume_exists": os.path.exists(NETWORK_VOLUME),
+        "network_volume_contents": [],
+        "comfyui_dir_exists": os.path.exists(COMFYUI_DIR),
+        "checkpoints_path": os.path.join(COMFYUI_MODELS, "checkpoints"),
         "checkpoints_exists": False,
         "checkpoints_contents": [],
-        "sonic_path": os.path.join(NETWORK_VOLUME, "sonic"),
+        "sonic_path": os.path.join(COMFYUI_MODELS, "sonic"),
         "sonic_exists": False,
         "sonic_contents": [],
         "supabase_configured": supabase_enabled(),
         "comfyui_process_alive": comfyui_process is not None and comfyui_process.poll() is None,
     }
 
-    if debug["volume_exists"]:
+    if debug["network_volume_exists"]:
         try:
-            debug["volume_contents"] = os.listdir(NETWORK_VOLUME)[:20]
+            debug["network_volume_contents"] = os.listdir(NETWORK_VOLUME)[:20]
         except Exception as e:
-            debug["volume_contents"] = [f"Error: {e}"]
+            debug["network_volume_contents"] = [f"Error: {e}"]
 
     if os.path.exists(debug["checkpoints_path"]):
         debug["checkpoints_exists"] = True
@@ -276,20 +462,38 @@ def get_debug_info() -> dict:
         except Exception as e:
             debug["sonic_contents"] = [f"Error: {e}"]
 
-    # Check voices directory
-    voices_path = os.path.join(NETWORK_VOLUME, "voices")
-    debug["voices_path"] = voices_path
-    if os.path.exists(voices_path):
-        debug["voices_exists"] = True
+    # Check voices directory (on network volume)
+    voices_volume = os.path.join(NETWORK_VOLUME, "voices")
+    voices_comfyui = os.path.join(COMFYUI_INPUT, "voices")
+    debug["voices_volume_path"] = voices_volume
+    debug["voices_volume_exists"] = os.path.exists(voices_volume)
+    debug["voices_comfyui_path"] = voices_comfyui
+    debug["voices_comfyui_is_symlink"] = os.path.islink(voices_comfyui)
+    if os.path.exists(voices_volume):
         try:
-            debug["voices_contents"] = os.listdir(voices_path)[:20]
+            debug["voices_contents"] = os.listdir(voices_volume)[:20]
         except Exception as e:
             debug["voices_contents"] = [f"Error: {e}"]
     else:
-        debug["voices_exists"] = False
+        debug["voices_contents"] = []
+
+    # Check avatars directory (on network volume)
+    avatars_volume = os.path.join(NETWORK_VOLUME, "avatars")
+    avatars_comfyui = os.path.join(COMFYUI_INPUT, "avatars")
+    debug["avatars_volume_path"] = avatars_volume
+    debug["avatars_volume_exists"] = os.path.exists(avatars_volume)
+    debug["avatars_comfyui_path"] = avatars_comfyui
+    debug["avatars_comfyui_is_symlink"] = os.path.islink(avatars_comfyui)
+    if os.path.exists(avatars_volume):
+        try:
+            debug["avatars_contents"] = os.listdir(avatars_volume)[:20]
+        except Exception as e:
+            debug["avatars_contents"] = [f"Error: {e}"]
+    else:
+        debug["avatars_contents"] = []
 
     # Check f5_tts directory
-    f5_path = os.path.join(NETWORK_VOLUME, "f5_tts")
+    f5_path = os.path.join(COMFYUI_MODELS, "f5_tts")
     debug["f5_tts_path"] = f5_path
     if os.path.exists(f5_path):
         debug["f5_tts_exists"] = True
@@ -300,30 +504,17 @@ def get_debug_info() -> dict:
     else:
         debug["f5_tts_exists"] = False
 
-    # Check ComfyUI input/voices symlink
-    comfyui_voices = "/workspace/ComfyUI/input/voices"
-    debug["comfyui_voices_is_symlink"] = os.path.islink(comfyui_voices)
-    debug["comfyui_voices_exists"] = os.path.exists(comfyui_voices)
-    if debug["comfyui_voices_exists"]:
+    # Check video models
+    video_path = os.path.join(COMFYUI_MODELS, "video")
+    debug["video_path"] = video_path
+    if os.path.exists(video_path):
+        debug["video_exists"] = True
         try:
-            debug["comfyui_voices_contents"] = os.listdir(comfyui_voices)[:20]
+            debug["video_contents"] = os.listdir(video_path)[:20]
         except Exception as e:
-            debug["comfyui_voices_contents"] = [f"Error: {e}"]
-
-    # Check ComfyUI models folder (should have symlinks)
-    comfyui_checkpoints = os.path.join(COMFYUI_MODELS, "checkpoints")
-    debug["comfyui_checkpoints_path"] = comfyui_checkpoints
-    debug["comfyui_checkpoints_is_symlink"] = os.path.islink(comfyui_checkpoints)
-    if os.path.exists(comfyui_checkpoints):
-        debug["comfyui_checkpoints_exists"] = True
-        try:
-            debug["comfyui_checkpoints_contents"] = os.listdir(comfyui_checkpoints)[:20]
-            if os.path.islink(comfyui_checkpoints):
-                debug["comfyui_checkpoints_target"] = os.readlink(comfyui_checkpoints)
-        except Exception as e:
-            debug["comfyui_checkpoints_contents"] = [f"Error: {e}"]
+            debug["video_contents"] = [f"Error: {e}"]
     else:
-        debug["comfyui_checkpoints_exists"] = False
+        debug["video_exists"] = False
 
     # Check ComfyUI API if running
     if debug["comfyui_process_alive"]:
@@ -399,51 +590,74 @@ def build_portrait_workflow(params: dict) -> dict:
 
 
 def build_tts_workflow(params: dict) -> dict:
-    """Build F5-TTS workflow for voice cloning using niknah/ComfyUI-F5-TTS.
+    """Build F5-TTS workflow for voice cloning.
 
-    Uses F5TTSAudio (file-based) which reads voice samples from input directory.
-    Voice files should be: sample.wav + sample.txt (transcript)
+    Uses F5TTSAudioInputs (tensor-based) + LoadAudio for voice sample.
+    Outputs via SaveAudioTensor.
+
+    Matches src/workflows/tts.json structure.
     """
     text = params.get("text", "Hello world")
-    sample = params.get("sample", "sample.wav")  # audio file in input/voices folder
+    voice_sample = params.get("voice_sample", "voices/sample.wav")
+    sample_text = params.get("sample_text", "")  # Optional transcript of reference
     speed = params.get("speed", 1.0)
     seed = params.get("seed", -1)
-    model = params.get("model", "F5")  # F5, F5v1, E2, etc.
+    model = params.get("model", "F5TTS_v1_Base")
+    vocoder = params.get("vocoder", "vocos")
 
     if seed == -1:
         seed = int.from_bytes(os.urandom(4), "big")
 
     return {
         "1": {
-            "class_type": "F5TTSAudio",
+            "class_type": "LoadAudio",
+            "inputs": {"audio": voice_sample}
+        },
+        "2": {
+            "class_type": "F5TTSAudioInputs",
             "inputs": {
-                "sample": sample,
+                "sample_audio": ["1", 0],
+                "sample_text": sample_text,
                 "speech": text,
                 "seed": seed,
                 "model": model,
-                "vocoder": "auto",
+                "vocoder": vocoder,
                 "speed": speed,
-                "model_type": "F5TTS_Base"
+                "model_type": "F5-TTS"
             }
         },
-        "2": {
-            "class_type": "PreviewAudio",
+        "3": {
+            "class_type": "SaveAudioTensor",
             "inputs": {
-                "audio": ["1", 0]
+                "audio": ["2", 0],
+                "filename_prefix": "ComfyUI_TTS"
             }
         }
     }
 
 
-def build_lipsync_workflow(params: dict) -> dict:
-    """Build SONIC lip-sync workflow."""
+def build_lipsync_workflow(params: dict, audio_duration: float) -> dict:
+    """Build SONIC lip-sync workflow.
 
+    Matches the reference workflow from ComfyUI-SONIC wiki.
+    All inputs are required for proper video output.
+
+    Args:
+        params: Workflow parameters
+        audio_duration: Detected audio duration in seconds
+    """
     portrait = params.get("portrait_image", "portrait.png")
     audio = params.get("audio", "speech.wav")
     svd_model = params.get("svd_checkpoint", "svd_xt_1_1.safetensors")
-    sonic_unet = params.get("sonic_unet", "sonic_unet.pth")
-    steps = params.get("inference_steps", 25)
+    sonic_unet = params.get("sonic_unet", "unet.pth")
+    inference_steps = params.get("inference_steps", 25)
     fps = params.get("fps", 25.0)
+    seed = params.get("seed", -1)
+
+    if seed == -1:
+        seed = int.from_bytes(os.urandom(4), "big")
+    # Cap seed to 32-bit signed int max (ComfyUI limit)
+    seed = seed % 2147483647
 
     return {
         "1": {
@@ -462,7 +676,10 @@ def build_lipsync_workflow(params: dict) -> dict:
             "class_type": "SONICTLoader",
             "inputs": {
                 "model": ["1", 0],
-                "sonic_unet": sonic_unet
+                "sonic_unet": sonic_unet,
+                "ip_audio_scale": 1.0,
+                "use_interframe": True,
+                "dtype": "fp16"
             }
         },
         "5": {
@@ -471,7 +688,11 @@ def build_lipsync_workflow(params: dict) -> dict:
                 "clip_vision": ["1", 1],
                 "vae": ["1", 2],
                 "audio": ["3", 0],
-                "image": ["2", 0]
+                "image": ["2", 0],
+                "min_resolution": 512,
+                "duration": audio_duration,
+                "expand_ratio": 1,
+                "weight_dtype": ["4", 1]  # Connect to SONICTLoader's DTYPE output
             }
         },
         "6": {
@@ -479,8 +700,11 @@ def build_lipsync_workflow(params: dict) -> dict:
             "inputs": {
                 "model": ["4", 0],
                 "data_dict": ["5", 0],
-                "steps": steps,
-                "cfg": 2.5
+                "seed": seed,
+                "randomize": "randomize",
+                "inference_steps": inference_steps,
+                "dynamic_scale": 1.0,
+                "fps": fps
             }
         },
         "7": {
@@ -488,8 +712,12 @@ def build_lipsync_workflow(params: dict) -> dict:
             "inputs": {
                 "images": ["6", 0],
                 "audio": ["3", 0],
-                "frame_rate": fps,
-                "filename_prefix": "lipsync"
+                "frame_rate": ["6", 1],
+                "loop_count": 0,
+                "filename_prefix": "ComfyUI_LipSync",
+                "format": "video/h264-mp4",
+                "pingpong": False,
+                "save_output": True
             }
         }
     }
@@ -510,43 +738,128 @@ def handler(event: dict) -> dict:
         {"output": {"files": [...], "seed": ..., "status": "success|error"}}
     """
     try:
-        # Ensure ComfyUI is running
-        start_comfyui()
-
         input_data = event.get("input", {})
         action = input_data.get("action", "portrait")
 
-        print(f"Processing action: {action}")
+        log.info(f"[{HANDLER_VERSION}] Processing action: {action}")
+
+        # Setup symlinks FIRST (fixes Docker overlay hiding volume contents)
+        setup_symlinks()
 
         # Handle non-workflow actions first
         if action == "health":
             return {
                 "status": "healthy",
+                "version": HANDLER_VERSION,
                 "comfyui_url": COMFYUI_URL,
                 "supabase_configured": supabase_enabled()
             }
         elif action == "debug":
             return get_debug_info()
 
-        # Build appropriate workflow
+        # Validate inputs (symlinks must exist first!)
+        validation_errors = validate_inputs(action, input_data)
+        if validation_errors:
+            log.error(f"Validation failed: {validation_errors}")
+            return {
+                "status": "error",
+                "version": HANDLER_VERSION,
+                "action": action,
+                "error": "Input validation failed",
+                "validation_errors": validation_errors
+            }
+
+        # Ensure ComfyUI is running
+        start_comfyui()
+
+        # Build workflow with action-specific logic
+        warnings = []
+
         if action == "portrait":
             workflow = build_portrait_workflow(input_data)
+
         elif action == "tts":
             workflow = build_tts_workflow(input_data)
+
         elif action == "lipsync":
-            workflow = build_lipsync_workflow(input_data)
+            # Auto-detect audio duration
+            audio_file = input_data.get("audio", "")
+            audio_path = os.path.join(COMFYUI_INPUT, audio_file)
+
+            caller_duration = input_data.get("duration")
+            audio_duration, duration_warning = resolve_duration(audio_path, caller_duration)
+
+            if duration_warning:
+                warnings.append(duration_warning)
+                log.warning(duration_warning)
+
+            log.info(f"Audio duration: {audio_duration:.1f}s")
+            workflow = build_lipsync_workflow(input_data, audio_duration)
+
         else:
-            return {"error": f"Unknown action: {action}"}
+            return {
+                "status": "error",
+                "version": HANDLER_VERSION,
+                "error": f"Unknown action: {action}"
+            }
 
         # Queue and wait for completion
         prompt_id = queue_prompt(workflow)
-        print(f"Queued prompt: {prompt_id}")
+        log.info(f"Queued prompt: {prompt_id}")
 
         history = wait_for_completion(prompt_id)
-        print(f"Workflow completed")
+        log.info("Workflow completed")
+
+        # Check for execution errors
+        status_info = history.get("status", {})
+        status_str = status_info.get("status_str", "unknown")
+        if status_str != "success":
+            messages = status_info.get("messages", [])
+            error_msg = f"Workflow failed with status: {status_str}"
+            if messages:
+                error_msg += f", messages: {messages}"
+            log.error(error_msg)
+            return {
+                "status": "error",
+                "version": HANDLER_VERSION,
+                "action": action,
+                "error": error_msg,
+                "prompt_id": prompt_id,
+                "raw_status": status_info,
+                "raw_outputs": history.get("outputs", {})
+            }
 
         # Get output files
         output_files = get_output_files(history)
+
+        if not output_files:
+            log.warning("No output files found in history")
+            return {
+                "status": "error",
+                "version": HANDLER_VERSION,
+                "action": action,
+                "error": "Workflow produced no output files",
+                "prompt_id": prompt_id,
+                "raw_outputs": history.get("outputs", {})
+            }
+
+        # Handle save_to_avatars for portrait action - copy to avatars folder for lipsync use
+        avatar_filename = None
+        if action == "portrait" and input_data.get("save_to_avatars"):
+            import shutil
+            avatar_name = input_data.get("avatar_name", "generated_portrait.png")
+            if not avatar_name.endswith(".png"):
+                avatar_name += ".png"
+
+            # Find the first image output
+            for f in output_files:
+                if f["type"] == "image" and os.path.exists(f["path"]):
+                    avatar_dest = os.path.join(COMFYUI_INPUT, "avatars", avatar_name)
+                    os.makedirs(os.path.dirname(avatar_dest), exist_ok=True)
+                    shutil.copy2(f["path"], avatar_dest)
+                    avatar_filename = f"avatars/{avatar_name}"
+                    log.info(f"Saved portrait to avatars: {avatar_filename}")
+                    break
 
         # Upload to Supabase if configured, otherwise return base64
         results = []
@@ -554,6 +867,11 @@ def handler(event: dict) -> dict:
 
         for file_info in output_files:
             file_path = file_info["path"]
+
+            if not os.path.exists(file_path):
+                log.warning(f"Output file not found: {file_path}")
+                continue
+
             file_size = os.path.getsize(file_path)
 
             result = {
@@ -562,7 +880,6 @@ def handler(event: dict) -> dict:
             }
 
             if use_supabase:
-                # Upload to Supabase Storage
                 try:
                     today = date.today().isoformat()
                     unique_id = str(uuid.uuid4())[:8]
@@ -570,10 +887,9 @@ def handler(event: dict) -> dict:
 
                     upload_result = upload_to_supabase(file_path, remote_path)
                     result.update(upload_result)
-                    print(f"Uploaded to Supabase: {remote_path}")
+                    log.info(f"Uploaded to Supabase: {remote_path}")
                 except Exception as e:
-                    # Fall back to base64 on upload error
-                    print(f"Supabase upload failed, falling back to base64: {e}")
+                    log.error(f"Supabase upload failed, falling back to base64: {e}")
                     result["data"] = file_to_base64(file_path)
                     result["encoding"] = "base64"
                     result["upload_error"] = str(e)
@@ -588,23 +904,39 @@ def handler(event: dict) -> dict:
 
             results.append(result)
 
-        return {
+        # Cleanup output files after upload
+        if use_supabase:
+            cleanup_output_files(output_files)
+
+        response = {
             "status": "success",
+            "version": HANDLER_VERSION,
             "action": action,
             "files": results,
             "prompt_id": prompt_id,
             "storage": "supabase" if use_supabase else "base64"
         }
 
+        if warnings:
+            response["warnings"] = warnings
+
+        # Include avatar path if saved for lipsync
+        if avatar_filename:
+            response["avatar_saved"] = avatar_filename
+            response["lipsync_ready"] = True
+
+        return response
+
     except Exception as e:
-        print(f"Error: {e}")
+        log.exception(f"Handler error: {e}")
         return {
             "status": "error",
+            "version": HANDLER_VERSION,
             "error": str(e)
         }
 
 
 # Entry point
 if __name__ == "__main__":
-    print("Starting RunPod Serverless Handler")
+    log.info(f"Starting RunPod Serverless Handler {HANDLER_VERSION}")
     runpod.serverless.start({"handler": handler})
