@@ -18,6 +18,10 @@ import {
   wrapComfyUIProgress,
   generateTaskId,
 } from "../progress.js";
+import {
+  getBackendFor,
+  isRunPodConfigured,
+} from "../backend/index.js";
 
 // ============================================================================
 // Schemas
@@ -28,6 +32,8 @@ export const lipSyncGenerateSchema = z.object({
   audio: z.string().describe("Filename of audio file in ComfyUI input folder"),
   model: z.enum(["sonic", "dice-talk", "hallo2", "sadtalker"]).optional().default("sonic")
     .describe("Lip-sync model to use"),
+  backend: z.enum(["auto", "local", "runpod"]).optional().default("auto")
+    .describe("Backend to use: 'auto' picks RunPod if configured (recommended for lipsync), 'local' forces local ComfyUI, 'runpod' forces RunPod"),
   // SONIC-specific parameters
   svd_checkpoint: z.string().optional().default("video/svd_xt_1_1.safetensors")
     .describe("SVD checkpoint (provides MODEL, CLIP_VISION, VAE)"),
@@ -52,6 +58,8 @@ export const talkSchema = z.object({
   voice_reference: z.string().describe("Voice reference audio file in ComfyUI input folder"),
   voice_reference_text: z.string().optional().describe("Transcript of the voice reference"),
   portrait_image: z.string().describe("Portrait image in ComfyUI input folder"),
+  backend: z.enum(["auto", "local", "runpod"]).optional().default("auto")
+    .describe("Backend to use: 'auto' picks RunPod if configured (recommended for talk), 'local' forces local ComfyUI, 'runpod' forces RunPod"),
   // TTS params
   speed: z.number().optional().default(1.0).describe("Speech speed multiplier"),
   tts_seed: z.number().optional().describe("TTS random seed"),
@@ -88,6 +96,7 @@ export async function lipSyncGenerate(
     portrait_image,
     audio,
     model,
+    backend,
     svd_checkpoint,
     sonic_unet,
     ip_audio_scale,
@@ -108,7 +117,48 @@ export async function lipSyncGenerate(
   const taskId = progressOptions?.taskId ?? generateTaskId();
   const emit = createProgressEmitter(taskId, progressOptions?.onProgress);
 
-  emit("queued", 0, "Lip-sync generation queued");
+  // Backend routing: use RunPod for GPU-heavy lipsync when available
+  const useRunPod = backend === "runpod" || (backend === "auto" && isRunPodConfigured());
+
+  if (useRunPod) {
+    emit("queued", 0, "Lip-sync generation queued (RunPod)");
+    emit("starting", 5, "Sending to RunPod serverless");
+
+    try {
+      const runpodBackend = getBackendFor("lipsync"); // Returns RunPodBackend
+      const result = await runpodBackend.lipsync({
+        portraitImage: portrait_image,
+        audio,
+        duration,
+        inferenceSteps: inference_steps,
+        fps,
+        seed,
+        outputPath: output_path,
+      });
+
+      if (!result.success) {
+        emit("error", 0, result.error || "RunPod lipsync failed");
+        throw new Error(result.error || "RunPod lipsync failed");
+      }
+
+      emit("complete", 100, "Lip-sync complete (RunPod)");
+
+      // Return remote URL if available, local path otherwise
+      const file = result.files[0];
+      return {
+        video: file?.localPath || output_path,
+        duration,
+        remote_url: file?.remoteUrl || file?.signedUrl,
+        taskId,
+      };
+    } catch (error) {
+      emit("error", 0, error instanceof Error ? error.message : "RunPod error");
+      throw error;
+    }
+  }
+
+  // Local backend: use existing implementation
+  emit("queued", 0, "Lip-sync generation queued (local)");
 
   // Only SONIC is implemented for now
   if (model !== "sonic") {

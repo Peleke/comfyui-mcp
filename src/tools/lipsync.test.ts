@@ -24,6 +24,21 @@ vi.mock("../storage/index.js", () => ({
   generateRemotePath: vi.fn((type, filename) => `generated/${type}/${Date.now()}_${filename}`),
 }));
 
+// Mock backend module
+vi.mock("../backend/index.js", () => ({
+  isRunPodConfigured: vi.fn().mockReturnValue(false),
+  getBackendFor: vi.fn().mockReturnValue({
+    name: "runpod",
+    lipsync: vi.fn().mockResolvedValue({
+      success: true,
+      files: [{ type: "video", filename: "test.mp4", remoteUrl: "https://example.com/test.mp4" }],
+      backend: "runpod",
+    }),
+  }),
+}));
+
+import * as backendModule from "../backend/index.js";
+
 // Mock ComfyUIClient
 const createMockClient = (overrides: Partial<ComfyUIClient> = {}) => ({
   baseUrl: "http://localhost:8188",
@@ -131,6 +146,41 @@ describe("Lip-Sync Tools", () => {
         });
         expect(result.success).toBe(true);
       }
+    });
+
+    it("validates backend options", () => {
+      const backends = ["auto", "local", "runpod"];
+
+      for (const backend of backends) {
+        const result = lipSyncGenerateSchema.safeParse({
+          portrait_image: "portrait.png",
+          audio: "speech.wav",
+          output_path: "/tmp/output.mp4",
+          backend,
+        });
+        expect(result.success).toBe(true);
+      }
+    });
+
+    it("defaults backend to auto", () => {
+      const input = {
+        portrait_image: "portrait.png",
+        audio: "speech.wav",
+        output_path: "/tmp/output.mp4",
+      };
+
+      const result = lipSyncGenerateSchema.parse(input);
+      expect(result.backend).toBe("auto");
+    });
+
+    it("rejects invalid backend", () => {
+      const result = lipSyncGenerateSchema.safeParse({
+        portrait_image: "portrait.png",
+        audio: "speech.wav",
+        output_path: "/tmp/output.mp4",
+        backend: "invalid",
+      });
+      expect(result.success).toBe(false);
     });
   });
 
@@ -1132,5 +1182,244 @@ describe("talk - Progress Callbacks", () => {
     await talk(baseArgs, client, { onProgress, taskId: "talk_test_123" });
 
     expect(progressEvents.every(e => e.taskId === "talk_test_123")).toBe(true);
+  });
+});
+
+describe("lipSyncGenerate - Backend Routing", () => {
+  const baseArgs = {
+    portrait_image: "portrait.png",
+    audio: "speech.wav",
+    model: "sonic" as const,
+    output_path: "/tmp/out.mp4",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(false);
+  });
+
+  it("uses local backend when backend is 'local'", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true); // Even if RunPod is configured
+    const client = createMockClient();
+
+    await lipSyncGenerate({ ...baseArgs, backend: "local" }, client);
+
+    // Should NOT call getBackendFor - should use local implementation
+    expect(backendModule.getBackendFor).not.toHaveBeenCalled();
+    expect(client.queuePrompt).toHaveBeenCalled();
+  });
+
+  it("uses local backend when backend is 'auto' and RunPod not configured", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(false);
+    const client = createMockClient();
+
+    await lipSyncGenerate({ ...baseArgs, backend: "auto" }, client);
+
+    expect(backendModule.getBackendFor).not.toHaveBeenCalled();
+    expect(client.queuePrompt).toHaveBeenCalled();
+  });
+
+  it("uses RunPod backend when backend is 'runpod'", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    const mockLipsync = vi.fn().mockResolvedValue({
+      success: true,
+      files: [{ type: "video", filename: "test.mp4", remoteUrl: "https://example.com/test.mp4" }],
+      backend: "runpod",
+    });
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: mockLipsync,
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client);
+
+    expect(backendModule.getBackendFor).toHaveBeenCalledWith("lipsync");
+    expect(mockLipsync).toHaveBeenCalled();
+    expect(client.queuePrompt).not.toHaveBeenCalled();
+    expect(result.remote_url).toBe("https://example.com/test.mp4");
+  });
+
+  it("uses RunPod backend when backend is 'auto' and RunPod is configured", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    const mockLipsync = vi.fn().mockResolvedValue({
+      success: true,
+      files: [{ type: "video", filename: "test.mp4", signedUrl: "https://signed.example.com/test.mp4" }],
+      backend: "runpod",
+    });
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: mockLipsync,
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate({ ...baseArgs, backend: "auto" }, client);
+
+    expect(backendModule.getBackendFor).toHaveBeenCalledWith("lipsync");
+    expect(mockLipsync).toHaveBeenCalled();
+    expect(result.remote_url).toBe("https://signed.example.com/test.mp4");
+  });
+
+  it("passes correct params to RunPod backend", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    const mockLipsync = vi.fn().mockResolvedValue({
+      success: true,
+      files: [{ type: "video", filename: "test.mp4" }],
+      backend: "runpod",
+    });
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: mockLipsync,
+    } as any);
+
+    const client = createMockClient();
+
+    await lipSyncGenerate({
+      ...baseArgs,
+      backend: "runpod",
+      duration: 15,
+      inference_steps: 30,
+      fps: 30,
+      seed: 42,
+    }, client);
+
+    expect(mockLipsync).toHaveBeenCalledWith(expect.objectContaining({
+      portraitImage: "portrait.png",
+      audio: "speech.wav",
+      duration: 15,
+      inferenceSteps: 30,
+      fps: 30,
+      seed: 42,
+      outputPath: "/tmp/out.mp4",
+    }));
+  });
+
+  it("throws when RunPod backend returns failure", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: false,
+        files: [],
+        error: "RunPod processing failed",
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+
+    await expect(
+      lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client)
+    ).rejects.toThrow("RunPod processing failed");
+  });
+
+  it("emits progress events for RunPod path", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: true,
+        files: [{ type: "video", filename: "test.mp4" }],
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+    const progressEvents: ProgressEvent[] = [];
+    const onProgress = (event: ProgressEvent) => progressEvents.push(event);
+
+    await lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client, { onProgress });
+
+    const stages = progressEvents.map(e => e.stage);
+    expect(stages).toContain("queued");
+    expect(stages).toContain("starting");
+    expect(stages).toContain("complete");
+  });
+
+  it("returns taskId for RunPod path", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: true,
+        files: [{ type: "video", filename: "test.mp4" }],
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client);
+
+    expect(result.taskId).toBeDefined();
+  });
+
+  it("uses provided taskId for RunPod path", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: true,
+        files: [{ type: "video", filename: "test.mp4" }],
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate(
+      { ...baseArgs, backend: "runpod" },
+      client,
+      { taskId: "custom_runpod_task" }
+    );
+
+    expect(result.taskId).toBe("custom_runpod_task");
+  });
+
+  it("prefers remoteUrl over signedUrl in result", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: true,
+        files: [{
+          type: "video",
+          filename: "test.mp4",
+          remoteUrl: "https://public.url/test.mp4",
+          signedUrl: "https://signed.url/test.mp4?token=abc",
+        }],
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client);
+
+    expect(result.remote_url).toBe("https://public.url/test.mp4");
+  });
+
+  it("falls back to signedUrl when remoteUrl not present", async () => {
+    vi.mocked(backendModule.isRunPodConfigured).mockReturnValue(true);
+    vi.mocked(backendModule.getBackendFor).mockReturnValue({
+      name: "runpod",
+      lipsync: vi.fn().mockResolvedValue({
+        success: true,
+        files: [{
+          type: "video",
+          filename: "test.mp4",
+          signedUrl: "https://signed.url/test.mp4?token=abc",
+        }],
+        backend: "runpod",
+      }),
+    } as any);
+
+    const client = createMockClient();
+
+    const result = await lipSyncGenerate({ ...baseArgs, backend: "runpod" }, client);
+
+    expect(result.remote_url).toBe("https://signed.url/test.mp4?token=abc");
   });
 });
