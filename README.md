@@ -18,7 +18,7 @@ So I distributed it.
 
 The MCP server runs on Fly.io—stateless, auto-scaling. GPU compute lives on RunPod, pay-per-second. Generated assets go to Supabase with signed URLs. Tailscale meshes it all together securely. What started as "let me generate some images" became a production distributed system because the alternative was a space heater that outputs nothing.
 
-Now Claude can generate images, upscale them, run ControlNet pipelines, do intelligent inpainting/outpainting, transfer styles with IP-Adapter, synthesize speech, and create lip-synced talking head videos—all through natural conversation. **37 tools. 745 tests. No API fees. Full parameter control.**
+Now Claude can generate images, upscale them, run ControlNet pipelines, do intelligent inpainting/outpainting, transfer styles with IP-Adapter, synthesize speech, and create lip-synced talking head videos—all through natural conversation. **40 tools. 796 tests. No API fees. Full parameter control.**
 
 ```
 You: "Generate a cyberpunk cityscape at sunset and save it to ./assets/hero.png"
@@ -30,7 +30,7 @@ Claude: I'll generate that image for you.
 
 ## Features
 
-- **🎨 Imagine Tool**: The ultimate generation tool—describe what you want in natural language and get optimized results with auto-detected model settings
+- **Imagine Tool**: The ultimate generation tool—describe what you want in natural language and get optimized results with auto-detected model settings
 - **Smart Prompting**: Auto-generates optimized prompts based on your model (Illustrious, Pony, Flux, SDXL, Realistic, SD1.5)
 - **Pipeline Execution**: Chain txt2img → hi-res fix → upscale in a single command
 - **Quality Presets**: From "draft" (fast) to "ultra" (full pipeline with upscaling)
@@ -52,7 +52,7 @@ Claude: I'll generate that image for you.
 ## Prerequisites
 
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) running locally
-- Node.js 18+
+- Node.js 20+
 - At least one Stable Diffusion checkpoint model
 
 ### Required Custom Nodes
@@ -78,15 +78,11 @@ Some features require additional ComfyUI custom nodes. Install these via ComfyUI
 
 ## Quick Start
 
-### 1. Clone and Install
+### Option A: Install from npm (Recommended)
 
 ```bash
-git clone https://github.com/yourusername/comfyui-mcp.git
-cd comfyui-mcp
-npm install
+npx @peleke.s/comfyui-mcp
 ```
-
-### 2. Configure Claude Code
 
 Add to `~/.claude/settings.json` (global) or `.claude/settings.local.json` (project-specific):
 
@@ -95,7 +91,7 @@ Add to `~/.claude/settings.json` (global) or `.claude/settings.local.json` (proj
   "mcpServers": {
     "comfyui": {
       "command": "npx",
-      "args": ["-y", "tsx", "/absolute/path/to/comfyui-mcp/src/index.ts"],
+      "args": ["-y", "@peleke.s/comfyui-mcp"],
       "env": {
         "COMFYUI_URL": "http://localhost:8188",
         "COMFYUI_MODEL": "dreamshaper_8.safetensors"
@@ -105,19 +101,39 @@ Add to `~/.claude/settings.json` (global) or `.claude/settings.local.json` (proj
 }
 ```
 
-> **Note**: Replace `/absolute/path/to/comfyui-mcp` with the actual path where you cloned this repo.
+### Option B: Run from Source
 
-### 3. Start ComfyUI
+```bash
+git clone https://github.com/Peleke/comfyui-mcp.git
+cd comfyui-mcp
+npm install
+npm run build
+```
+
+```json
+{
+  "mcpServers": {
+    "comfyui": {
+      "command": "node",
+      "args": ["/absolute/path/to/comfyui-mcp/dist/index.js"],
+      "env": {
+        "COMFYUI_URL": "http://localhost:8188",
+        "COMFYUI_MODEL": "dreamshaper_8.safetensors"
+      }
+    }
+  }
+}
+```
+
+### Start ComfyUI
 
 Ensure ComfyUI is running at the configured URL (default: http://localhost:8188).
 
-### 4. Restart Claude Code
+### Restart Claude Code
 
 **Important**: Claude Code loads MCP servers at startup. You must restart Claude Code (exit and relaunch) after adding the configuration.
 
-### 5. Generate Images
-
-Start generating:
+### Generate Images
 
 ```
 "Generate a portrait with warm lighting and save it to ./images/portrait.png"
@@ -193,7 +209,7 @@ Upscale an image using AI upscaling models.
 | list_upscale_models | Upscaling models (RealESRGAN, etc.) |
 | get_queue_status | Running and pending jobs |
 
-### 🎨 imagine (Recommended!)
+### imagine (Recommended)
 
 **The easiest way to generate images.** Describe what you want in natural language, and it handles everything: auto-detects your model family, crafts optimized prompts, applies quality presets, and runs the full pipeline.
 
@@ -509,7 +525,7 @@ The AI suggested "use Playwright locally" for browser automation. That's not rem
 ```
 comfyui-mcp/
 ├── src/
-│   ├── index.ts              # MCP server entry point (37 tools)
+│   ├── index.ts              # MCP server entry point (40 tools)
 │   ├── comfyui-client.ts     # ComfyUI REST/WebSocket client
 │   ├── workflows/
 │   │   ├── txt2img.json      # Text-to-image template
@@ -526,7 +542,7 @@ comfyui-mcp/
 │   │   ├── index.ts          # Provider factory
 │   │   └── supabase.ts       # Supabase implementation
 │   └── tools/
-│       ├── imagine.ts        # 🎨 Main generation tool
+│       ├── imagine.ts        # Main generation tool
 │       ├── pipeline.ts       # Multi-step pipeline executor
 │       ├── controlnet.ts     # ControlNet tools
 │       ├── ipadapter.ts      # IP-Adapter style transfer
@@ -571,15 +587,14 @@ npm run test:watch
 npm run test:coverage
 ```
 
-**745 tests** covering all tools, prompting strategies, storage providers, and pipeline execution.
+**796 tests** covering all tools, prompting strategies, storage providers, and pipeline execution.
 
 ## Troubleshooting
 
 ### Tools not showing in Claude Code
 1. Ensure you've restarted Claude Code after adding the MCP configuration
-2. Check that the path to `src/index.ts` is absolute and correct
-3. Verify the server starts manually: `npx tsx /path/to/src/index.ts` (should print "ComfyUI MCP server running on stdio")
-4. Try killing all Claude Code instances and restarting fresh
+2. Verify the server starts manually: `npx @peleke.s/comfyui-mcp` (should print "ComfyUI MCP server running on stdio")
+3. Try killing all Claude Code instances and restarting fresh
 
 ### "Connection refused"
 Ensure ComfyUI is running at the configured COMFYUI_URL.
@@ -659,7 +674,7 @@ Don't have a local GPU? Run ComfyUI on RunPod and connect remotely.
 1. Create a RunPod pod with PyTorch template
 2. SSH in and run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/deploy/quick-deploy.sh | bash -s -- --dreamshaper
+curl -fsSL https://raw.githubusercontent.com/Peleke/comfyui-mcp/main/deploy/quick-deploy.sh | bash -s -- --dreamshaper
 ```
 3. Get your pod URL: `https://<POD_ID>-8188.proxy.runpod.net`
 4. Configure locally:
