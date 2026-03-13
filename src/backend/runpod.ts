@@ -11,6 +11,7 @@ import {
   TTSParams,
   LipSyncParams,
   ImagineParams,
+  ImageToVideoParams,
   RunPodBackendConfig,
 } from "./types.js";
 import { RunPodServerlessClient } from "../runpod-serverless-client.js";
@@ -172,6 +173,53 @@ export class RunPodBackend implements ComfyBackend {
       seed: params.seed,
       outputPath: params.outputPath,
     });
+  }
+
+  async imageToVideo(params: ImageToVideoParams): Promise<GenerationResult> {
+    try {
+      const response = await this.client.runSync({
+        action: "img2video",
+        source_image: params.sourceImage,
+        backend: params.backend || "animatediff_v3",
+        checkpoint: params.checkpoint,
+        prompt: params.prompt,
+        negative_prompt: params.negativePrompt,
+        width: params.width || 512,
+        height: params.height || 512,
+        frames: params.frames || 16,
+        fps: params.fps || 8,
+        steps: params.steps,
+        cfg_scale: params.cfgScale,
+        seed: params.seed,
+        motion_scale: params.motionScale || 1.0,
+      });
+
+      if (response.status !== "success") {
+        return {
+          success: false,
+          files: [],
+          error: response.error || "Image-to-video generation failed",
+          backend: "runpod",
+        };
+      }
+
+      const files = await this.processFiles(response.files || [], params.outputPath);
+
+      return {
+        success: true,
+        files,
+        seed: (response as any).seed,
+        promptId: response.prompt_id,
+        backend: "runpod",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        files: [],
+        error: error instanceof Error ? error.message : "Unknown error",
+        backend: "runpod",
+      };
+    }
   }
 
   /**

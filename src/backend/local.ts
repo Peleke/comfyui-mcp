@@ -12,6 +12,7 @@ import {
   TTSParams,
   LipSyncParams,
   ImagineParams,
+  ImageToVideoParams,
   LocalBackendConfig,
 } from "./types.js";
 import { ComfyUIClient } from "../comfyui-client.js";
@@ -299,5 +300,11 @@ export class LocalBackend implements ComfyBackend {
     }
 
     return files;
+  }
+
+  async imageToVideo(params: ImageToVideoParams): Promise<GenerationResult> {
+    // TODO: Implement local AnimateDiff workflow execution
+    // For now, this is handled directly in src/tools/video.ts using the legacy path
+    throw new Error("imageToVideo not yet implemented on LocalBackend — use the video tool directly");
   }
 }

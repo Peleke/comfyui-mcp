@@ -64,6 +64,23 @@ export interface LipSyncParams {
   outputPath: string;
 }
 
+export interface ImageToVideoParams {
+  sourceImage: string;
+  outputPath: string;
+  backend?: string;
+  checkpoint?: string;
+  prompt?: string;
+  negativePrompt?: string;
+  width?: number;
+  height?: number;
+  frames?: number;
+  fps?: number;
+  steps?: number;
+  cfgScale?: number;
+  seed?: number;
+  motionScale?: number;
+}
+
 export interface ImagineParams {
   description: string;
   style?: string;
@@ -110,6 +127,11 @@ export interface ComfyBackend {
    * General image generation
    */
   imagine(params: ImagineParams): Promise<GenerationResult>;
+
+  /**
+   * Generate video from a still image (AnimateDiff)
+   */
+  imageToVideo(params: ImageToVideoParams): Promise<GenerationResult>;
 }
 
 // ============================================================================

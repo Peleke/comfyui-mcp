@@ -1,22 +1,66 @@
 {
-  "name": "@peleke/comfyui-mcp",
+  "name": "@peleke.s/comfyui-mcp",
   "version": "1.0.0",
-  "description": "MCP server for ComfyUI image generation",
+  "description": "40-tool MCP server for ComfyUI: image generation, ControlNet, IP-Adapter, inpainting, TTS voice cloning, lip-sync video, and AnimateDiff — with smart prompt optimization across 6 model families (Flux, SDXL, SD1.5, Illustrious, Pony, Realistic).",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "comfyui-mcp": "./dist/index.js",
     "comfyui-mcp-serve": "./dist/http-server.js"
   },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Peleke/comfyui-mcp.git"
+    "url": "git+https://github.com/Peleke/comfyui-mcp.git"
   },
+  "homepage": "https://github.com/Peleke/comfyui-mcp",
+  "bugs": {
+    "url": "https://github.com/Peleke/comfyui-mcp/issues"
+  },
+  "license": "MIT",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "comfyui",
+    "stable-diffusion",
+    "image-generation",
+    "flux",
+    "sdxl",
+    "controlnet",
+    "ip-adapter",
+    "inpainting",
+    "tts",
+    "voice-cloning",
+    "lip-sync",
+    "animatediff",
+    "ai-art",
+    "model-context-protocol",
+    "claude",
+    "anthropic"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",

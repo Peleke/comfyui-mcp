@@ -1360,3 +1360,134 @@ export function buildTalkingAvatarWorkflow(params: {
 
   return workflow;
 }
+
+// ============================================================================
+// Image-to-Video (AnimateDiff) Workflow
+// ============================================================================
+
+export interface I2VWorkflowParams {
+  sourceImage: string;
+  backend?: string;
+  checkpoint?: string;
+  prompt?: string;
+  negativePrompt?: string;
+  width?: number;
+  height?: number;
+  frames?: number;
+  fps?: number;
+  steps?: number;
+  cfgScale?: number;
+  seed?: number;
+  motionScale?: number;
+  filenamePrefix?: string;
+}
+
+/**
+ * Build an AnimateDiff image-to-video workflow.
+ * Uses ADE_LoadAnimateDiffModel + ADE_UseEvolvedSampling for v3,
+ * or ADE_ApplyAnimateLCMI2VModel for LCM backend.
+ */
+export function buildI2VWorkflow(params: I2VWorkflowParams): Record<string, any> {
+  const isLCM = params.backend === "animatediff_lcm";
+  const steps = params.steps ?? (isLCM ? 6 : 20);
+  const cfgScale = params.cfgScale ?? (isLCM ? 1.8 : 7.0);
+  const checkpoint = params.checkpoint ?? "v1-5-pruned-emaonly.safetensors";
+  const motionModel = isLCM ? "AnimateLCM_sd15_i2v.ckpt" : "v3_sd15_mm.ckpt";
+  const seed = params.seed ?? Math.floor(Math.random() * 2147483647);
+
+  const workflow: Record<string, any> = {
+    // Load checkpoint
+    "1": {
+      class_type: "CheckpointLoaderSimple",
+      inputs: { ckpt_name: checkpoint },
+    },
+    // Load source image
+    "2": {
+      class_type: "LoadImage",
+      inputs: { image: params.sourceImage },
+    },
+    // VAE Encode
+    "3": {
+      class_type: "VAEEncode",
+      inputs: {
+        pixels: ["2", 0],
+        vae: ["1", 2],
+      },
+    },
+    // Load AnimateDiff model
+    "4": {
+      class_type: "ADE_LoadAnimateDiffModel",
+      inputs: { model_name: motionModel },
+    },
+    // Apply AnimateDiff
+    "5": {
+      class_type: isLCM ? "ADE_ApplyAnimateLCMI2VModel" : "ADE_UseEvolvedSampling",
+      inputs: isLCM
+        ? {
+            motion_model: ["4", 0],
+            model: ["1", 0],
+            ref_latent: ["3", 0],
+            m_scale: params.motionScale ?? 1.0,
+          }
+        : {
+            motion_model: ["4", 0],
+            model: ["1", 0],
+          },
+    },
+    // CLIP Text Encode (positive)
+    "6": {
+      class_type: "CLIPTextEncode",
+      inputs: {
+        text: params.prompt || "high quality, smooth motion",
+        clip: ["1", 1],
+      },
+    },
+    // CLIP Text Encode (negative)
+    "7": {
+      class_type: "CLIPTextEncode",
+      inputs: {
+        text: params.negativePrompt || "low quality, blurry, static",
+        clip: ["1", 1],
+      },
+    },
+    // KSampler with AnimateDiff
+    "8": {
+      class_type: "KSampler",
+      inputs: {
+        model: ["5", 0],
+        positive: ["6", 0],
+        negative: ["7", 0],
+        latent_image: ["3", 0],
+        seed,
+        steps,
+        cfg: cfgScale,
+        sampler_name: isLCM ? "lcm" : "euler_ancestral",
+        scheduler: isLCM ? "sgm_uniform" : "normal",
+        denoise: 0.85,
+      },
+    },
+    // VAE Decode
+    "9": {
+      class_type: "VAEDecode",
+      inputs: {
+        samples: ["8", 0],
+        vae: ["1", 2],
+      },
+    },
+    // Video Combine (output)
+    video_output: {
+      class_type: "VHS_VideoCombine",
+      inputs: {
+        images: ["9", 0],
+        frame_rate: params.fps ?? 8,
+        loop_count: 0,
+        filename_prefix: params.filenamePrefix || "ComfyUI_I2V",
+        format: "video/h264-mp4",
+        pingpong: false,
+        save_output: true,
+      },
+    },
+  };
+
+  return workflow;
+}
