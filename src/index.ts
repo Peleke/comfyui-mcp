@@ -49,6 +49,12 @@ import {
   listLipSyncModelsSchema,
 } from "./tools/lipsync.js";
 import {
+  imageToVideo,
+  imageToVideoSchema,
+  listAnimateDiffModels,
+  listAnimateDiffModelsSchema,
+} from "./tools/video.js";
+import {
   listAvatars,
   listAvatarsSchema,
   listVoicesCatalog,
@@ -92,7 +98,7 @@ const TOOLS = [
   {
     name: "generate_image",
     description:
-      "Generate an image from a text prompt using ComfyUI (txt2img). Supports LoRAs for style customization.",
+      "Render a single image from a text prompt (txt2img). Returns JSON with the saved file path and generation metadata (~400 tokens). Call when the user provides a prompt AND you already know the exact model, sampler, and dimensions — otherwise use 'imagine' which auto-configures everything. Unlike img2img, starts from noise, not an existing image.",
     inputSchema: {
       type: "object",
       properties: {
@@ -166,7 +172,7 @@ const TOOLS = [
   {
     name: "img2img",
     description:
-      "Generate an image based on an input image (img2img). Use denoise to control how much the image changes.",
+      "Transform an existing image with a text prompt (img2img). Returns JSON with saved file path and metadata (~400 tokens). Call when the user has a source image they want to modify — denoise 0.3 preserves most detail, 0.9 reimagines it. Unlike generate_image, requires an input image; unlike stylize_photo, gives full prompt control without ControlNet.",
     inputSchema: {
       type: "object",
       properties: {
@@ -236,7 +242,7 @@ const TOOLS = [
   },
   {
     name: "upscale_image",
-    description: "Upscale an image using AI upscaling models (RealESRGAN, etc.)",
+    description: "Increase image resolution using AI upscaling (default: RealESRGAN 4x). Returns JSON with saved file path and final dimensions (~300 tokens). Call after generation when the user needs a higher-resolution version. Unlike the upscale step in execute_pipeline, this is standalone — use it on any existing image.",
     inputSchema: {
       type: "object",
       properties: {
@@ -267,7 +273,7 @@ const TOOLS = [
   },
   {
     name: "list_models",
-    description: "List available checkpoint models in ComfyUI",
+    description: "Get all installed checkpoint model filenames. Returns a JSON array of model name strings (~200-800 tokens depending on install). Call before generate_image/execute_pipeline when you need to pick a model, or to verify a model exists before referencing it. Unlike list_loras, these are base models, not style add-ons.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -275,7 +281,7 @@ const TOOLS = [
   },
   {
     name: "list_loras",
-    description: "List available LoRA models in ComfyUI",
+    description: "Get all installed LoRA filenames for style/character customization. Returns a JSON array of LoRA name strings (~200-800 tokens). Call when the user wants a specific style or character and you need to find matching LoRAs. Unlike list_models, these are style add-ons applied on top of a base checkpoint.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -283,7 +289,7 @@ const TOOLS = [
   },
   {
     name: "list_samplers",
-    description: "List available samplers in ComfyUI",
+    description: "Get all available sampler algorithm names (euler, dpm++, etc.). Returns a JSON array of strings (~100-200 tokens). Call only when the user asks for a specific sampler or you need to verify one exists. Most tools default to euler_ancestral — you rarely need this unless customizing.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -291,7 +297,7 @@ const TOOLS = [
   },
   {
     name: "list_schedulers",
-    description: "List available schedulers in ComfyUI",
+    description: "Get all available scheduler names (normal, karras, sgm_uniform, etc.). Returns a JSON array of strings (~100-200 tokens). Call only when the user specifically requests a scheduler or you need to verify one exists. Default 'normal' works for most cases — this is a rare lookup.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -299,7 +305,7 @@ const TOOLS = [
   },
   {
     name: "list_upscale_models",
-    description: "List available upscale models in ComfyUI",
+    description: "Get all installed AI upscale model filenames. Returns a JSON array of strings (~100-300 tokens). Call before upscale_image when you need to pick a specific upscaler or verify RealESRGAN_x4plus.pth is available. Unlike list_models, these are post-processing upscalers, not generation checkpoints.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -307,7 +313,7 @@ const TOOLS = [
   },
   {
     name: "get_queue_status",
-    description: "Get the current ComfyUI queue status (running and pending jobs)",
+    description: "Check how many jobs are running and pending in the ComfyUI queue. Returns JSON with running_count, pending_count, and job details (~200-400 tokens). Call before submitting a new generation if the user is waiting and you need to check whether previous work finished. Unlike ping_comfyui, this shows workload, not just connectivity.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -316,7 +322,7 @@ const TOOLS = [
   {
     name: "craft_prompt",
     description:
-      "Generate an optimized prompt from a natural language description. Auto-detects the best prompting strategy based on the model, or you can specify a model family. Returns the optimized prompt, negative prompt, recommended settings, LoRA recommendations, and suggested pipeline.",
+      "Convert a natural language description into an optimized prompt for a specific model family. Returns JSON with positive prompt, negative prompt, recommended settings, LoRA suggestions, and pipeline config (~600-900 tokens). Call before generate_image/execute_pipeline when you need model-specific prompt engineering — or skip this entirely and use 'imagine' which calls it internally. Unlike get_prompting_guide, this returns a ready-to-use prompt, not tips.",
     inputSchema: {
       type: "object",
       properties: {
@@ -388,7 +394,7 @@ const TOOLS = [
   },
   {
     name: "get_prompting_guide",
-    description: "Get detailed prompting tips and an example prompt for a specific model family",
+    description: "Get prompting syntax rules and an example prompt for one model family (illustrious, pony, sdxl, flux, sd15, realistic). Returns markdown with tag format, quality tokens, and a worked example (~400-600 tokens). Call when learning how a new model family expects prompts. Unlike craft_prompt, this teaches the format — it doesn't generate a ready-to-use prompt.",
     inputSchema: {
       type: "object",
       properties: {
@@ -403,7 +409,7 @@ const TOOLS = [
   },
   {
     name: "list_prompting_strategies",
-    description: "List all supported model families and their prompting strategies",
+    description: "Get a summary of all supported model families and how they differ (tag format, quality tokens, typical settings). Returns JSON with 6 families: illustrious, pony, sdxl, flux, sd15, realistic (~300-500 tokens). Call once at session start if you'll be generating across multiple model types. Unlike get_prompting_guide, this is an overview — not deep tips for one family.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -412,7 +418,7 @@ const TOOLS = [
   {
     name: "execute_pipeline",
     description:
-      "Execute a full image generation pipeline: txt2img → (optional) hi-res fix → (optional) upscale. This is the recommended way to generate high-quality images.",
+      "Run a multi-stage image pipeline: txt2img, then optional hi-res fix (img2img detail pass), then optional AI upscale. Returns JSON with saved file path, dimensions, and stage metadata (~500 tokens). Call when you need fine-grained control over a multi-stage generation — if you just want 'best results from a description', use 'imagine' instead. Unlike generate_image, this chains stages; unlike imagine, it requires manual prompt/model configuration.",
     inputSchema: {
       type: "object",
       properties: {
@@ -516,7 +522,7 @@ const TOOLS = [
   {
     name: "imagine",
     description:
-      "🎨 The ultimate image generation tool. Takes a natural language description and handles everything: auto-detects model family, crafts optimized prompts, applies quality presets, and executes the full pipeline (txt2img → hi-res fix → upscale). Use this for the best results with minimal configuration.",
+      "Generate an image from a plain-English description with zero configuration. Auto-detects model family, crafts optimized prompts, selects settings, and runs the full pipeline (txt2img + optional hi-res fix + upscale). Returns JSON with saved file path, crafted prompt, and pipeline metadata (~600-800 tokens). Call this as your DEFAULT for any image generation request. Use generate_image or execute_pipeline only when you need manual control over every parameter.",
     inputSchema: {
       type: "object",
       properties: {
@@ -601,6 +607,32 @@ const TOOLS = [
           type: "string",
           description: "Upscale model (default: RealESRGAN_x4plus.pth)",
         },
+        // Hidden image (QR ControlNet) parameters
+        hidden_image: {
+          type: "string",
+          description: "Filename of image to embed (in ComfyUI input folder). When provided, uses QR ControlNet to hide the image in the generation.",
+        },
+        convert_to_bw: {
+          type: "boolean",
+          description: "Auto-convert the hidden image to high-contrast B&W before use",
+          default: false,
+        },
+        bw_threshold: {
+          type: "number",
+          description: "Threshold for B&W conversion (0-255). Pixels above become white, below become black",
+          default: 128,
+        },
+        bw_invert: {
+          type: "boolean",
+          description: "Invert the B&W result (swap black and white)",
+          default: false,
+        },
+        visibility: {
+          type: "string",
+          enum: ["subtle", "moderate", "obvious"],
+          description: "How visible the hidden image should be (subtle=0.9, moderate=1.1, obvious=1.3 strength)",
+          default: "subtle",
+        },
       },
       required: ["description", "output_path"],
     },
@@ -611,7 +643,7 @@ const TOOLS = [
   {
     name: "generate_with_controlnet",
     description:
-      "Generate an image guided by a control image (edge detection, depth, pose, etc.). Supports Canny, Depth, OpenPose, QR Code, Scribble, Lineart, and Semantic Segmentation.",
+      "Generate an image guided by a structural control signal from a reference image (edges, depth, pose, etc.). Returns JSON with saved file path and metadata (~400 tokens). Call when the user wants to preserve specific structure (edges, pose, depth) from a reference while generating new content. For pose-only, use generate_with_pose; for style transfer, use stylize_photo; for multiple controls, use generate_with_multi_controlnet.",
     inputSchema: {
       type: "object",
       properties: {
@@ -689,7 +721,7 @@ const TOOLS = [
   {
     name: "generate_with_multi_controlnet",
     description:
-      "Generate an image with multiple ControlNet conditions combined (e.g., pose + depth).",
+      "Generate an image with 2-5 ControlNet conditions stacked (e.g., pose + depth + canny). Returns JSON with saved file path and metadata (~500 tokens). Call when a single control type isn't enough — the user needs both pose AND depth, or edges AND segmentation. Unlike generate_with_controlnet (single control), this combines multiple structural constraints.",
     inputSchema: {
       type: "object",
       properties: {
@@ -743,7 +775,7 @@ const TOOLS = [
   {
     name: "preprocess_control_image",
     description:
-      "Run preprocessing on an image to see the control signal (edge detection, pose skeleton, depth map, etc.)",
+      "Extract a control signal visualization from an image (canny edges, depth map, pose skeleton, etc.) without generating anything. Returns JSON with saved preprocessed image path (~300 tokens). Call to preview what a ControlNet will 'see' before committing to a full generation, or to create a control image for later use. Unlike generate_with_controlnet, this only preprocesses — no generation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -772,7 +804,7 @@ const TOOLS = [
   {
     name: "generate_with_hidden_image",
     description:
-      "Generate an image with a hidden image embedded (like a watermark or secret symbol). Uses QR Code ControlNet.",
+      "Embed a hidden image (logo, symbol, watermark) inside a generated image using QR Code ControlNet. Returns JSON with saved file path (~400 tokens). Call when the user wants a steganographic or artistic hidden-image effect. Requires a high-contrast B&W hidden image. Visibility levels: subtle (barely visible), moderate, obvious. Unlike generate_with_controlnet with qrcode type, this has simplified visibility presets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -816,7 +848,7 @@ const TOOLS = [
   {
     name: "stylize_photo",
     description:
-      "Transform a real photo into an artistic style (anime, oil painting, watercolor, etc.) while preserving composition.",
+      "Restyle a photo as anime, oil painting, watercolor, comic, sketch, or Ghibli while preserving the original composition. Returns JSON with saved file path (~400 tokens). Call when the user has a real photo and wants an artistic transformation. Uses Canny/Lineart ControlNet internally. Unlike img2img, this preserves edges precisely; unlike generate_with_controlnet, this has one-click style presets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -861,7 +893,7 @@ const TOOLS = [
   {
     name: "generate_with_pose",
     description:
-      "Generate a character matching the exact pose from a reference image. Uses OpenPose ControlNet.",
+      "Generate a new character in the exact pose from a reference photo (body, face, hands). Returns JSON with saved file path (~400 tokens). Call when the user has a reference image and wants a different character in the same pose. Uses OpenPose ControlNet. Unlike generate_with_controlnet, this auto-configures pose detection; unlike generate_with_ipadapter, this copies pose, not identity.",
     inputSchema: {
       type: "object",
       properties: {
@@ -906,7 +938,7 @@ const TOOLS = [
   {
     name: "generate_with_composition",
     description:
-      "Generate an image with the same general composition/layout as a reference, but creative freedom in details. Uses Semantic Segmentation ControlNet.",
+      "Generate an image matching the spatial layout of a reference (where sky, ground, figures are) but with creative freedom in details. Returns JSON with saved file path (~400 tokens). Call when the user wants 'same composition, different content.' Uses Semantic Segmentation ControlNet. Unlike generate_with_pose (copies body position), this copies scene layout; unlike stylize_photo, this creates new content.",
     inputSchema: {
       type: "object",
       properties: {
@@ -948,7 +980,7 @@ const TOOLS = [
   },
   {
     name: "list_controlnet_models",
-    description: "List available ControlNet models organized by type",
+    description: "Get all installed ControlNet models grouped by type (canny, depth, openpose, etc.). Returns JSON object keyed by control type, each with an array of model filenames (~300-600 tokens). Call before generate_with_controlnet to verify which control types are available, or to pick a specific model variant. Unlike list_models, these are structural-guidance models, not base checkpoints.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -960,7 +992,7 @@ const TOOLS = [
   {
     name: "generate_with_ipadapter",
     description:
-      "Generate an image with IP-Adapter for identity preservation. Uses reference images to guide generation while maintaining character/style identity. Perfect for consistent character generation across multiple images.",
+      "Generate an image that preserves the identity (face, character, style) from 1+ reference images. Returns JSON with saved file path (~400 tokens). Call when the user wants the same character/person across multiple images, or wants to transfer visual identity from a reference. Unlike generate_with_pose (copies pose only), this copies identity/appearance; unlike img2img, this works from a prompt + identity reference, not a source image.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1051,7 +1083,7 @@ const TOOLS = [
   {
     name: "inpaint",
     description:
-      "Inpaint a masked region of an image. White areas in the mask are regenerated, black areas are preserved. Perfect for fixing hands, faces, or any specific region.",
+      "Regenerate a masked region of an image while keeping the rest untouched (white=regenerate, black=keep). Returns JSON with saved file path (~400 tokens). Call when the user wants to fix a specific area (bad hands, wrong face, unwanted object) in an existing image. Requires a mask — use create_mask to auto-generate one if needed. Unlike outpaint, this works within existing bounds; unlike img2img, this targets a specific region.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1097,7 +1129,7 @@ const TOOLS = [
   {
     name: "outpaint",
     description:
-      "Extend image canvas and generate content for new regions. Uses ImagePadForOutpaint for seamless blending.",
+      "Extend an image's canvas in any direction and AI-generate content for the new regions, blending seamlessly with the original. Returns JSON with saved file path and new dimensions (~400 tokens). Call when the user wants more sky, ground, or scene beyond the current frame. Specify pixels to extend per side. Unlike inpaint (fixes regions inside), this grows the image outward.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1148,7 +1180,7 @@ const TOOLS = [
   {
     name: "create_mask",
     description:
-      "Generate a mask using AI segmentation (GroundingDINO + SAM). Supports presets (hands, face, eyes, body, background, foreground), custom text prompts, or manual rectangular regions.",
+      "Auto-generate a B&W mask for inpainting using AI segmentation (GroundingDINO + SAM). Returns JSON with saved mask file path (~300 tokens). Call before inpaint when you need a mask — use presets (hands, face, eyes, body, background, foreground), a custom text prompt ('red shirt', 'cat'), or manual coordinates. This is a prerequisite tool for inpaint — it produces the mask, not the final image.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1209,7 +1241,7 @@ const TOOLS = [
   // ============================================================================
   {
     name: "tts_generate",
-    description: "Generate speech from text using F5-TTS with voice cloning. Provide a reference audio to clone the voice.",
+    description: "Convert text to speech with voice cloning from a reference audio sample (10-30s). Returns JSON with saved audio file path and duration (~300 tokens). Call when the user wants spoken audio from text in a specific voice. Requires a voice reference file — use list_voices to find available samples. Unlike the 'talk' tool, this produces audio only, no video.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1256,7 +1288,7 @@ const TOOLS = [
   },
   {
     name: "list_tts_models",
-    description: "List available TTS models (F5-TTS, XTTS)",
+    description: "Get installed text-to-speech model names and their capabilities. Returns a JSON array (~100-200 tokens). Call before tts_generate if you need a model other than the default F5TTS_v1_Base. Rarely needed — the default works for most voice cloning tasks.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1264,7 +1296,7 @@ const TOOLS = [
   },
   {
     name: "list_voices",
-    description: "List available voice samples for TTS",
+    description: "Get filenames of voice reference audio samples in the input folder. Returns a JSON array of filenames (~100-300 tokens). Call before tts_generate or talk to find a voice_reference file. Unlike list_voices_catalog, this returns just filenames without metadata.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1275,7 +1307,7 @@ const TOOLS = [
   // ============================================================================
   {
     name: "lipsync_generate",
-    description: "Generate a lip-synced video from a portrait image and audio file using SONIC.",
+    description: "Animate a portrait photo to lip-sync with an audio file, producing an MP4 video. Returns JSON with saved video path and duration (~400 tokens). Call when you already have both a portrait image AND an audio file and want to make the portrait 'speak' the audio. Unlike 'talk' (handles TTS+lipsync in one call), this requires pre-existing audio.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1331,7 +1363,7 @@ const TOOLS = [
   },
   {
     name: "talk",
-    description: "Full pipeline: Text → TTS → Lip-Sync → Video. Generate a talking avatar video from text input.",
+    description: "End-to-end talking head: text in, MP4 video out. Chains TTS voice cloning + SONIC lip-sync in one call. Returns JSON with saved video path and duration (~500 tokens). Call this as your DEFAULT when the user wants a character to 'say' something — it handles the full Text → Speech → Lip-Sync → Video pipeline. Unlike lipsync_generate, you provide text, not audio; unlike tts_generate, you get video, not just audio.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1376,7 +1408,103 @@ const TOOLS = [
   },
   {
     name: "list_lipsync_models",
-    description: "List available lip-sync models (SONIC, DICE-Talk, Hallo2, SadTalker)",
+    description: "Get installed lip-sync model names and status. Returns a JSON array with model names and availability (~100-200 tokens). Call before lipsync_generate if you need a model other than the default SONIC. Rarely needed — SONIC is the recommended default.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  // ============================================================================
+  // Video Generation Tools (AnimateDiff)
+  // ============================================================================
+  {
+    name: "image_to_video",
+    description:
+      "Animate a still image into a short video (default 16 frames) using AnimateDiff. Returns JSON with saved MP4 path and frame count (~400 tokens). Call when the user wants to bring a static image to life with motion. Two motion backends: animatediff_v3 (quality, 20 steps) or animatediff_lcm (fast, 6 steps). Requires an SD1.5 checkpoint. Unlike lipsync_generate (audio-driven face animation), this creates general motion from an image.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_image: {
+          type: "string",
+          description: "Filename of source image in ComfyUI input folder",
+        },
+        output_path: {
+          type: "string",
+          description: "Full path to save the output video",
+        },
+        backend: {
+          type: "string",
+          enum: ["auto", "local", "runpod"],
+          description: "Backend to use: 'auto' picks RunPod if configured, 'local' forces local ComfyUI, 'runpod' forces RunPod",
+          default: "auto",
+        },
+        motion_backend: {
+          type: "string",
+          enum: ["animatediff_v3", "animatediff_lcm"],
+          description: "AnimateDiff backend: 'animatediff_v3' for quality (20 steps), 'animatediff_lcm' for speed (6 steps)",
+          default: "animatediff_v3",
+        },
+        checkpoint: {
+          type: "string",
+          description: "SD1.5 checkpoint model (default: v1-5-pruned-emaonly.safetensors)",
+        },
+        prompt: {
+          type: "string",
+          description: "Text prompt to guide the animation (optional)",
+        },
+        negative_prompt: {
+          type: "string",
+          description: "Negative prompt (optional)",
+        },
+        width: {
+          type: "number",
+          description: "Output video width (default: 512)",
+          default: 512,
+        },
+        height: {
+          type: "number",
+          description: "Output video height (default: 512)",
+          default: 512,
+        },
+        frames: {
+          type: "number",
+          description: "Number of frames to generate (default: 16)",
+          default: 16,
+        },
+        fps: {
+          type: "number",
+          description: "Output video FPS (default: 8)",
+          default: 8,
+        },
+        steps: {
+          type: "number",
+          description: "Sampling steps (default: 6 for LCM, 20 for v3)",
+        },
+        cfg_scale: {
+          type: "number",
+          description: "CFG scale (default: 1.8 for LCM, 7.0 for v3)",
+        },
+        seed: {
+          type: "number",
+          description: "Random seed for reproducibility",
+        },
+        motion_scale: {
+          type: "number",
+          description: "Motion intensity scale (default: 1.0)",
+          default: 1.0,
+        },
+        upload_to_cloud: {
+          type: "boolean",
+          description: "Upload to cloud storage if configured (default: true)",
+          default: true,
+        },
+      },
+      required: ["source_image", "output_path"],
+    },
+  },
+  {
+    name: "list_animatediff_models",
+    description: "Get installed AnimateDiff motion model filenames and compatible SD1.5 checkpoints. Returns JSON with arrays for motion_models and checkpoints (~200-400 tokens). Call before image_to_video to verify which motion models are available or to pick a specific SD1.5 checkpoint.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1388,7 +1516,7 @@ const TOOLS = [
   {
     name: "list_avatars",
     description:
-      "List available avatar/portrait images in ComfyUI input folder. Convention: place portraits in input/avatars/ subfolder.",
+      "Get filenames of portrait images available for lip-sync (in input/avatars/). Returns a JSON array of image filenames (~100-300 tokens). Call before lipsync_generate or talk to find a portrait_image file, or to check what avatars are ready to use. Unlike list_voices_catalog (voice samples), this lists face/portrait images.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1397,7 +1525,7 @@ const TOOLS = [
   {
     name: "list_voices_catalog",
     description:
-      "List available voice reference files with metadata. Convention: place voice samples in input/voices/ subfolder.",
+      "Get voice reference files with metadata (duration, format, size) from input/voices/. Returns a JSON array of objects with filename, duration_seconds, and file_size (~200-500 tokens). Call before tts_generate or talk to pick a voice sample with enough context to choose well. Unlike list_voices (filenames only), this includes duration and format metadata.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1406,7 +1534,7 @@ const TOOLS = [
   {
     name: "create_portrait",
     description:
-      "Generate a portrait image optimized for lip-sync. Supports multiple backends: Flux GGUF (local quant), Flux FP8 (standard), or SDXL checkpoints (novaFurry, yiffinhell, perfectdeliberate, etc.)",
+      "Generate a front-facing portrait image optimized for lip-sync use. Returns JSON with saved file path (~400 tokens). Call when you need to create a new avatar for lipsync_generate or talk and no suitable portrait exists in list_avatars. Supports backends: flux_gguf (local), flux_fp8 (RunPod), sdxl (diverse styles). Unlike 'imagine' (general-purpose), this auto-applies portrait framing and lip-sync-friendly composition.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1473,7 +1601,7 @@ const TOOLS = [
   {
     name: "batch_create_portraits",
     description:
-      "Generate multiple portraits in batch using different models. Perfect for creating a library of talking heads or testing different styles.",
+      "Generate multiple portrait images in a single call, each with its own model/style/description. Returns JSON array with saved file paths, one per portrait (~300-600 tokens). Call when the user needs a library of avatars or wants to compare the same character across different models. Unlike create_portrait (one at a time), this batches N portraits in one request.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1518,7 +1646,7 @@ const TOOLS = [
   {
     name: "check_connection",
     description:
-      "Check health of ComfyUI connection and storage providers. Returns GPU info, latency, and storage status. Use before expensive operations.",
+      "Verify ComfyUI is running and report GPU info, latency, and storage provider status. Returns JSON with gpu_name, vram_total, vram_free, latency_ms, and storage status (~300-500 tokens). Call once at session start, or before expensive multi-step pipelines, to confirm the backend is healthy. Unlike ping_comfyui (binary reachable/not), this returns diagnostic details.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1527,7 +1655,7 @@ const TOOLS = [
   {
     name: "ping_comfyui",
     description:
-      "Quick connectivity check - just verifies ComfyUI is reachable. Faster than full health check.",
+      "Fast binary check: is ComfyUI reachable? Returns JSON with {reachable: true/false} (~50 tokens). Call before any generation tool if you suspect the server might be down. Sub-second response. Unlike check_connection (full diagnostics with GPU/storage), this is a lightweight ping — use it for quick pre-flight checks.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -1754,6 +1882,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           hires_steps: args?.hires_steps,
           enable_upscale: args?.enable_upscale,
           upscale_model: args?.upscale_model,
+          // Hidden image (QR ControlNet) parameters
+          hidden_image: args?.hidden_image,
+          convert_to_bw: args?.convert_to_bw,
+          bw_threshold: args?.bw_threshold,
+          bw_invert: args?.bw_invert,
+          visibility: args?.visibility,
         });
 
         // Get available LoRAs for recommendations
@@ -2077,6 +2211,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "list_lipsync_models": {
         const validatedArgs = listLipSyncModelsSchema.parse(args);
         const result = await listLipSyncModels(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // ====== Video Generation Tools (AnimateDiff) ======
+      case "image_to_video": {
+        const validatedArgs = imageToVideoSchema.parse(args);
+        const result = await imageToVideo(validatedArgs, client);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case "list_animatediff_models": {
+        const validatedArgs = listAnimateDiffModelsSchema.parse(args);
+        const result = await listAnimateDiffModels(validatedArgs, client);
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
